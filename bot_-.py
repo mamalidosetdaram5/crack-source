@@ -15,7 +15,7 @@ from telethon.tl.types import DocumentAttributeVideo, Message, MessageMediaPhoto
 
 API_ID = 27291470
 API_HASH = "b5fb1f8dc111c7baf967b527eb677e5f"
-BOT_TOKEN = "8976551206:AAGyWdTtvaQtgHElgYkriZNNmBs2s8rkLsA"
+BOT_TOKEN = "8976551206:AAEw9jioQg-jsVUkNpKLY4vNN_wQuvDqIdE"
 ADMIN_IDS = [6716559782, 8192645915, 6745595929]
 OWNER_ID = ADMIN_IDS[0]
 FORCE_CHANNEL = "FlameWaifu_Cheat_Datebase"
@@ -24,9 +24,13 @@ SOURCE_CHANNEL = "Picker_database"  # channel username for auto-sync
 DATA_FILE = "data.json"
 USERS_FILE = "users.json"
 BANNED_FILE = "banned.json"
+ITEMS_PER_PAGE = 10
 SYNC_DEFAULT_COMMAND = "/pick"
 SYNC_IMAGE_COMMAND = "/pick"
 SYNC_VIDEO_COMMAND = "/pick"
+USER_SESSION_NAME = "reader_session"  # separate user account session, used only to
+                                       # read channel history (bots can't do this
+                                       # unless they're admins of the channel)
 
 _data_cache = None
 _data_dirty = False
@@ -381,6 +385,22 @@ async def main():
         traceback.print_exc()
         return
 
+    # Separate USER account client, used only for reading channel history.
+    # Telegram bots are not allowed to call GetHistoryRequest (iter_messages)
+    # on a channel unless the bot is an admin there; a normal user account
+    # can read the history of any public channel it can see. This client is
+    # read-only: it never sends messages, joins chats, or does anything else.
+    reader_client = None
+    try:
+        reader_client = TelegramClient(USER_SESSION_NAME, API_ID, API_HASH)
+        await reader_client.start()  # first run: asks for phone + login code in this terminal
+        reader_me = await reader_client.get_me()
+        print(f"Reader account @{reader_me.username or reader_me.id} connected (read-only, for channel history).")
+    except Exception as e:
+        print(f"Failed to start reader account: {e}")
+        traceback.print_exc()
+        reader_client = None  # /pick and /pick <range> will report this as unavailable
+
     @client.on(events.NewMessage(pattern=r"^/ping$"))
     async def ping(event):
         await event.reply("pong")
@@ -419,10 +439,12 @@ async def main():
           {"status": "not_found"}
           {"status": "error", "reason": ...}
         """
+        if reader_client is None:
+            return {"status": "error", "reason": "no_reader"}
         found_msg = None
         found_name = None
         checked = 0
-        async for msg in client.iter_messages(entity):
+        async for msg in reader_client.iter_messages(entity):
             checked += 1
             if not has_media(msg):
                 continue
@@ -459,6 +481,13 @@ async def main():
         if not is_admin(event.sender_id):
             return
         try:
+            if reader_client is None:
+                await event.reply(
+                    "⚠️ حساب خواننده (reader account) متصل نیست. لاگ کنسول ربات را بررسی کنید.",
+                    parse_mode="html"
+                )
+                return
+
             target_id = event.pattern_match.group(2).strip()
             channel = (SOURCE_CHANNEL or "").strip().strip("@")
             if not channel:
@@ -467,7 +496,7 @@ async def main():
 
             status = await event.reply(f"🔎 در حال جستجوی کد <code>{target_id}</code> در @{channel} ...", parse_mode="html")
             try:
-                entity = await client.get_entity(channel)
+                entity = await reader_client.get_entity(channel)
             except Exception:
                 await status.edit("⚠️ چنل پیدا نشد.")
                 return
@@ -478,7 +507,7 @@ async def main():
                 await status.edit(f"❌ هیچ پستی با کد <code>{target_id}</code> پیدا نشد.", parse_mode="html")
                 return
             if r["status"] == "error":
-                reason = {"no_thumb": "دانلود مدیا ناموفق بود.", "error": "خطای داخلی."}.get(r["reason"], r["reason"])
+                reason = {"no_thumb": "دانلود مدیا ناموفق بود.", "error": "خطای داخلی.", "no_reader": "حساب خواننده متصل نیست."}.get(r["reason"], r["reason"])
                 await status.edit(f"⚠️ خطا در ذخیره: {reason}", parse_mode="html")
                 return
 
@@ -508,6 +537,13 @@ async def main():
         if not is_admin(event.sender_id):
             return
         try:
+            if reader_client is None:
+                await event.reply(
+                    "⚠️ حساب خواننده (reader account) متصل نیست. لاگ کنسول ربات را بررسی کنید.",
+                    parse_mode="html"
+                )
+                return
+
             start = int(event.pattern_match.group(2))
             end = int(event.pattern_match.group(3))
             if start > end:
@@ -532,7 +568,7 @@ async def main():
                 parse_mode="html"
             )
             try:
-                entity = await client.get_entity(channel)
+                entity = await reader_client.get_entity(channel)
             except Exception:
                 await status.edit("⚠️ چنل پیدا نشد.")
                 return
@@ -551,6 +587,7 @@ async def main():
                     not_found.append(target_id)
                 else:
                     errors.append(target_id)
+                await asyncio.sleep(0.3)  # be gentle with Telegram's API / flood limits
 
                 if i % 5 == 0 or i == total:
                     elapsed = int(time.time() - t0)
@@ -1125,9 +1162,15 @@ async def main():
             if not channel:
                 await event.reply("⚠️ چنلی مشخص نشده. از SOURCE_CHANNEL یا `/sync @channel` استفاده کنید.", parse_mode="html")
                 return
+            if reader_client is None:
+                await event.reply(
+                    "⚠️ حساب خواننده (reader account) متصل نیست. لاگ کنسول ربات را بررسی کنید.",
+                    parse_mode="html"
+                )
+                return
             status = await event.reply(f"🔄 در حال اسکن @{channel} با {sync_cmd or SYNC_DEFAULT_COMMAND}...")
             try:
-                entity = await client.get_entity(channel)
+                entity = await reader_client.get_entity(channel)
             except Exception:
                 await status.edit("⚠️ چنل پیدا نشد. مطمئن شوید چنل عمومی است.")
                 return
@@ -1141,7 +1184,7 @@ async def main():
             t0 = time.time()
             dbg_count = 0
             await status.edit(f"🔄 اسکن @{channel} شروع شد ...")
-            async for msg in client.iter_messages(entity):
+            async for msg in reader_client.iter_messages(entity):
                 count += 1
                 if count % 10 == 0:
                     elapsed = int(time.time() - t0)
