@@ -13,25 +13,26 @@ from PIL import Image
 from telethon import TelegramClient, events, Button
 from telethon.tl.types import DocumentAttributeVideo, Message, MessageMediaPhoto, MessageMediaDocument
 
-API_ID = -
-API_HASH = "-"
-BOT_TOKEN = "-"
+API_ID = 27291470
+API_HASH = "b5fb1f8dc111c7baf967b527eb677e5f"
+BOT_TOKEN = "8976551206:AAEw9jioQg-jsVUkNpKLY4vNN_wQuvDqIdE"
 ADMIN_IDS = [6716559782, 8192645915, 6745595929]
 OWNER_ID = ADMIN_IDS[0]
-FORCE_CHANNEL = "-"
-FORCE_CHANNEL_LINK = ""
+FORCE_CHANNEL = "FlameWaifu_Cheat_Datebase"
+FORCE_CHANNEL_LINK = "https://t.me/FlameWaifu_Cheat_Datebase"
 SOURCE_CHANNEL = "Picker_database"  # channel username for auto-sync
 DATA_FILE = "data.json"
 AUTO_WATCH_FILE = "auto_watch_state.json"
 USERS_FILE = "users.json"
 BANNED_FILE = "banned.json"
-ITEMS_PER_PAGE = 10
+ITEMS_PER_PAGE = 3
 SYNC_DEFAULT_COMMAND = "/pick"
 SYNC_IMAGE_COMMAND = "/pick"
 SYNC_VIDEO_COMMAND = "/pick"
 EXTERNAL_CHECK_BOT = "character_picker_bot"  # bot whose /check <id> replies we mirror via /checkid
 EXTERNAL_CHECK_COMMAND = "/check"
-EXTERNAL_CHECK_TIMEOUT = 20  # seconds to wait for the external bot's reply
+EXTERNAL_CHECK_TIMEOUT = 3  # seconds to wait for the external bot's reply
+EXTERNAL_CHECK_COOLDOWN = 2  # seconds to wait between consecutive requests in /checkid <range>
 USER_SESSION_NAME = "reader_session"  # separate user account session, used only to
                                        # read channel history (bots can't do this
                                        # unless they're admins of the channel)
@@ -932,11 +933,13 @@ async def main():
                 start, end = end, start
 
             total = end - start + 1
-            if total > 200:
+            max_range = 100
+            if total > max_range:
+                est_minutes = (total * EXTERNAL_CHECK_COOLDOWN) // 60
                 await event.reply(
                     f"⚠️ بازه <code>{start}-{end}</code> شامل {total} کد است. "
-                    f"چون هر کد یک پیام واقعی به ربات دیگر می‌فرستد و منتظر پاسخ می‌ماند، "
-                    f"حداکثر بازه مجاز 200 کد است.",
+                    f"چون بین هر درخواست {EXTERNAL_CHECK_COOLDOWN} ثانیه فاصله می‌اندازیم تا لیمیت نشویم، "
+                    f"حداکثر بازه مجاز {max_range} کد است (این بازه حدود {est_minutes} دقیقه طول می‌کشید).",
                     parse_mode="html"
                 )
                 return
@@ -957,7 +960,7 @@ async def main():
                     saved.append((target_id, r["name"]))
                 else:
                     failed.append((target_id, _checkid_error_text.get(r["reason"], r["reason"])))
-                await asyncio.sleep(0.5)  # be gentle with both Telegram and the external bot
+                await asyncio.sleep(EXTERNAL_CHECK_COOLDOWN)  # be gentle with both Telegram and the external bot
 
                 if i % 3 == 0 or i == total:
                     elapsed = int(time.time() - t0)
