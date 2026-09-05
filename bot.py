@@ -2,55 +2,78 @@ from pyrogram import Client, filters
 import re
 import asyncio
 
-# ⚠️ اطلاعات اکانتت رو اینجا وارد کن (از my.telegram.org بگیر)
+# ⚠️ اطلاعات اکانتت رو اینجا وارد کن
 api_id = 29206821  # عدد باشه
 api_hash = "6fc091b004de021d44c76f01e27fe91c"  # رشته متنی باشه
 
 app = Client("my_autogift_session", api_id=api_id, api_hash=api_hash)
 
-# تنظیمات_delay (خیلی مهم برای بن نشدن)
+# تنظیمات تاخیر (برای جلوگیری از بن شدن)
 DELAY_BETWEEN_GIFTS = 3  # ثانیه صبر بین هر گیفت
 DELAY_AFTER_PAGE = 2     # ثانیه صبر بعد از زدن دکمه صفحه بعد
 
 async def extract_numbers(text):
     """اعداد داخل براکت [1234] رو استخراج می‌کنه"""
-    return re.findall(r'\[(\d+)\)', text)
+    return re.findall(r'\[(\d+)\]', text)
 
 async def click_confirm_button(client, chat_id, reply_to_msg_id):
-    """دنبال پیام بات می‌گرده و اگر دکمه ✅ داشت روش کلیک می‌کنه"""
+    """دنبال پیام بات می‌گرده و اگر دکمه ✅ داشت روش کلیک می‌کنه یا متنش رو چک می‌کنه"""
     await asyncio.sleep(1.5) # صبر می‌کنیم تا بات جواب بده
     
-    async for message in app.get_chat_history(chat_id, limit=10):
+    async for message in app.get_chat_history(chat_id, limit=15):
         if message.reply_to_message and message.reply_to_message.id == reply_to_msg_id:
-            # پیام بات رو پیدا کردیم
             if message.reply_markup and message.reply_markup.inline_keyboard:
                 for row in message.reply_markup.inline_keyboard:
                     for button in row:
-                        if "✅" in button.text:
-                            # کلیک کردن روی دکمه اینلاین
+                        if "✅" in button.text or "Confirm" in button.text:
                             await client.request_callback_answer(chat_id, message.id, button.callback_data)
                             return True
-            # اگر دکمه نبود و خود متن ✅ داشت، یعنی تایید شده
             if "✅" in message.text:
                 return True
             break
     return False
 
-@app.on_message(filters.command("start_gift", prefixes="!") & filters.reply)
+@app.on_message(filters.command("start_gift", prefixes="!"))
 async def auto_gift_handler(client, message):
-    target_msg = message.reply_to_message
-    
-    if not target_msg.text:
+    # 1. چک کردن اینکه حتماً روی یک پیام ریپلای شده باشه
+    if not message.reply_to_message:
         await message.reply_text("❌ لطفاً روی پیامی که لیست کاراکترها توش هست ریپلای کن.")
         return
 
-    await message.reply_text("🚀 سلف اتو گیفت شروع به کار کرد...")
+    # 2. چک کردن اینکه آیدی شخص مورد نظر رو وارد کرده باشه
+    if len(message.command) < 2:
+        await message.reply_text("❌ لطفاً آیدی یا یوزرنیم شخص مورد نظر رو هم بنویس.\nمثال: `!start_gift @username`")
+        return
+
+    target_msg = message.reply_to_message
+    target_identifier = message.command[1] # همون @username یا آیدی عددی
+    
+    await message.reply_text("🔍 در حال پیدا کردن پیام شخص مورد نظر...")
+
+    # 3. پیدا کردن آخرین پیام شخص مورد نظر توی چت
+    target_user_msg = None
+    async for msg in client.get_chat_history(message.chat.id, limit=200):
+        if msg.from_user:
+            # چک کردن با یوزرنیم
+            if msg.from_user.username and msg.from_user.username.lower() == target_identifier.strip('@').lower():
+                target_user_msg = msg
+                break
+            # چک کردن با آیدی عددی
+            elif str(msg.from_user.id) == target_identifier.strip('@'):
+                target_user_msg = msg
+                break
+
+    if not target_user_msg:
+        await message.reply_text("❌ پیامی از این شخص توی ۲۰۰ پیام اخیر چت پیدا نشد. لطفاً مطمئن شو یوزرنیم/آیدی درسته یا یک پیام ازش بخواه تا بیاد بالای چت.")
+        return
+
+    await message.reply_text(f"✅ پیام شخص مورد نظر پیدا شد. شروع به گیفت کردن...")
     
     current_msg = target_msg
     page_number = 1
 
     while True:
-        # 1. استخراج اعداد از پیام فعلی
+        # 4. استخراج اعداد از پیام لیست
         numbers = await extract_numbers(current_msg.text)
         
         if not numbers:
@@ -59,24 +82,23 @@ async def auto_gift_handler(client, message):
 
         await message.reply_text(f"📄 صفحه {page_number}: {len(numbers)} عدد پیدا شد. شروع به گیفت...")
 
-        # 2. گیفت کردن اعداد یکی یکی
+        # 5. گیفت کردن اعداد یکی یکی
         for num in numbers:
-            # ارسال دستور گیفت و ریپلای کردن روی پیام اصلی
-            sent_msg = await current_msg.reply_text(f"/gift {num}")
+            # ⭐️ نکته اصلی: ریپلای کردن روی پیام شخص مورد نظر (نه پیام لیست)
+            sent_msg = await target_user_msg.reply_text(f"/gift {num}")
             
-            # 3. تایید گرفتن از بات (کلیک روی ✅ یا چک کردن متن)
+            # 6. تایید گرفتن از بات
             await click_confirm_button(client, current_msg.chat.id, sent_msg.id)
             
-            # ⚠️ دیلی برای جلوگیری از بن شدن (بسیار مهم)
+            # ⚠️ دیلی برای جلوگیری از بن شدن
             await asyncio.sleep(DELAY_BETWEEN_GIFTS)
 
-        # 4. چک کردن برای رفتن به صفحه بعد (دکمه ➡️)
+        # 7. چک کردن برای رفتن به صفحه بعد (دکمه ➡️)
         next_page_found = False
         if current_msg.reply_markup and current_msg.reply_markup.inline_keyboard:
             for row in current_msg.reply_markup.inline_keyboard:
                 for button in row:
                     if "➡️" in button.text or "Next" in button.text:
-                        # کلیک روی دکمه صفحه بعد
                         await client.request_callback_answer(current_msg.chat.id, current_msg.id, button.callback_data)
                         next_page_found = True
                         break
@@ -87,12 +109,12 @@ async def auto_gift_handler(client, message):
             await message.reply_text("🏁 دکمه ➡️ پیدا نشد. یعنی به آخرین صفحه رسیدیم. سلف متوقف شد.")
             break
 
-        # 5. صبر کردن برای آپدیت شدن پیام و گرفتن متن جدید
+        # 8. صبر کردن برای آپدیت شدن پیام لیست
         await asyncio.sleep(DELAY_AFTER_PAGE)
         
-        # گرفتن آپدیت جدید پیام (چون متن پیام بعد از کلیک روی ➡️ عوض میشه)
+        # گرفتن آپدیت جدید پیام لیست
         current_msg = await client.get_messages(current_msg.chat.id, current_msg.id)
         page_number += 1
 
-print("سلف آماده است. برای شروع، روی پیام لیست ریپلای کن و بفرست: !start_gift")
+print("سلف آماده است. برای شروع، روی پیام لیست ریپلای کن و بفرست: !start_gift @username")
 app.run()
