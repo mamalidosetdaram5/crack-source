@@ -12,15 +12,18 @@ Selfbot - Auto Forward & Extract Bot Response
 
 from telethon import TelegramClient, events
 from telethon.tl.types import Message
-import json, os, re
+import json, os, re, asyncio
 
 # ─── تنظیمات ────────────────────────────────────────────────────────────────
 API_ID   = 29206821          # ← API ID خودت رو بذار
-API_HASH = "6fc091b004de021d44c76f01e27fe91c"         # ← API Hash خودت رو بذار
+API_HASH = "6fc091b004de021d44c76f01e27fe91c"    # ← API Hash خودت رو بذار
 SESSION  = "selfbot"  # اسم فایل session
 
+# دیلی قبل از ارسال دستور توی گروه (ثانیه)
+SEND_DELAY = 1.5
+
 # ایدی ربات که پیام بهش فوروارد میشه
-PICKER_BOT = "character_picker_bot"
+PICKER_BOT = "zswaifu_cheat_bot"
 
 # ─── State ──────────────────────────────────────────────────────────────────
 CONFIG_FILE = "selfbot_config.json"
@@ -166,6 +169,7 @@ async def on_bot_response(event):
 
     # ارسال توی گروه‌هایی که pending هستن
     for group_id, chat_id in list(pending.items()):
+        await asyncio.sleep(SEND_DELAY)
         await client.send_message(chat_id, command)
         print(f"[+] دستور ارسال شد به گروه {chat_id}: {command}")
         del pending[group_id]
