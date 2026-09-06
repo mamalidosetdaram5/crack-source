@@ -1,7 +1,7 @@
 from pyrogram import Client, filters
 import re
 import asyncio
- 
+
 api_id = 29206821  # <-- آیدی خودت رو بذار
 api_hash = "6fc091b004de021d44c76f01e27fe91c"  # <-- هش خودت رو بذار
 
@@ -10,10 +10,11 @@ app = Client("my_autogift_session", api_id=api_id, api_hash=api_hash)
 DELAY_BETWEEN_GIFTS = 3
 DELAY_AFTER_PAGE = 2
 
-def extract_numbers(text):
-    if not text:
+def extract_numbers(content):
+    if not content:
         return []
-    return re.findall(r'\[(\d+)\]', text)
+    # پیدا کردن اعداد داخل براکت مثل [5330]
+    return re.findall(r'\[(\d+)\]', content)
 
 async def click_confirm(client, chat_id, reply_msg_id):
     await asyncio.sleep(1.5)
@@ -36,17 +37,17 @@ async def click_confirm(client, chat_id, reply_msg_id):
 @app.on_message(filters.command("start_gift", prefixes="!"))
 async def auto_gift(client, message):
     if not message.reply_to_message:
-        await message.reply_text("روی پیام لیست ریپلای کن.")
+        await message.reply_text("❌ روی پیام لیست (عکس یا متن) ریپلای کن.")
         return
 
     if len(message.command) < 2:
-        await message.reply_text("آیدی شخص رو بنویس. مثال: !start_gift @user")
+        await message.reply_text("❌ آیدی شخص رو بنویس. مثال: !start_gift @user")
         return
 
     target_msg = message.reply_to_message
     target_user = message.command[1]
 
-    await message.reply_text("در حال جستجو...")
+    await message.reply_text("🔍 در حال جستجو...")
     print("🔍 شروع جستجو برای شخص مورد نظر...")
 
     user_msg = None
@@ -61,12 +62,11 @@ async def auto_gift(client, message):
                 break
 
     if not user_msg:
-        await message.reply_text("پیام شخص پیدا نشد.")
+        await message.reply_text("❌ پیام شخص پیدا نشد. مطمئن شو اخیراً پیام داده.")
         return
 
-    # ⭐️ چاپ اطلاعات شخص برای اطمینان در CMD
-    print(f"✅ شخص پیدا شد. نام: {user_msg.from_user.first_name} | ID پیام: {user_msg.id}")
-    await message.reply_text(f"شخص پیدا شد: {user_msg.from_user.first_name}. شروع گیفت...")
+    print(f"✅ شخص پیدا شد: {user_msg.from_user.first_name} | ID پیام: {user_msg.id}")
+    await message.reply_text(f"✅ شخص پیدا شد: {user_msg.from_user.first_name}. شروع گیفت...")
 
     current_msg = target_msg
     page = 1
@@ -74,21 +74,26 @@ async def auto_gift(client, message):
     while True:
         print(f"\n--- بررسی صفحه {page} ---")
 
-        if not current_msg.text:
-            print("⚠️ پیام لیست متن ندارد.")
+        # ⭐️ تغییر مهم: خواندن هم متن و هم کپشن (برای عکس و فیلم)
+        msg_content = current_msg.text or current_msg.caption
+        
+        if not msg_content:
+            print("⚠️ پیام نه متن دارد و نه کپشن.")
+            await message.reply_text("⚠️ پیام لیست نامعتبر است.")
             break
 
-        numbers = extract_numbers(current_msg.text)
-        print(f"🔢 اعداد پیدا شده: {numbers}")
+        print(f"محتوای پیدا شده (۱۰۰ کاراکتر اول): {msg_content[:100]}...")
+        
+        numbers = extract_numbers(msg_content)
+        print(f"🔢 اعداد استخراج شده: {numbers}")
 
         if not numbers:
-            await message.reply_text(f"صفحه {page} عددی نداشت.")
+            await message.reply_text(f"✅ صفحه {page} عددی برای گیفت نداشت.")
             break
 
         for num in numbers:
             print(f"📤 در حال ارسال /gift {num} به عنوان ریپلای روی پیام ID: {user_msg.id}")
             try:
-                # ⭐️ استفاده از send_message برای اطمینان ۱۰۰٪ از ریپلای شدن
                 sent = await client.send_message(
                     chat_id=message.chat.id,
                     text=f"/gift {num}",
@@ -97,7 +102,7 @@ async def auto_gift(client, message):
                 print(f"✅ پیام ارسال و ریپلای شد. ID پیام جدید: {sent.id}")
             except Exception as e:
                 print(f"❌ خطا در ارسال: {e}")
-                await message.reply_text(f"خطا: {e}")
+                await message.reply_text(f"❌ خطا: {e}")
                 break
 
             await click_confirm(client, message.chat.id, sent.id)
@@ -117,14 +122,14 @@ async def auto_gift(client, message):
                             )
                             next_found = True
                         except Exception as e:
-                            print(f"خطا دکمه: {e}")
+                            print(f"❌ خطا در کلیک دکمه: {e}")
                         break
                 if next_found:
                     break
 
         if not next_found:
-            print("🏁 دکمه بعدی نیست. پایان.")
-            await message.reply_text("پایان. دکمه بعدی نیست.")
+            print("🏁 دکمه بعدی نیست. پایان عملیات.")
+            await message.reply_text("🏁 پایان. دکمه بعدی نیست.")
             break
 
         await asyncio.sleep(DELAY_AFTER_PAGE)
@@ -133,11 +138,12 @@ async def auto_gift(client, message):
             current_msg = await client.get_messages(
                 current_msg.chat.id, current_msg.id
             )
+            print("🔄 پیام لیست با موفقیت آپدیت شد.")
         except Exception as e:
-            print(f"خطا آپدیت: {e}")
+            print(f"❌ خطا در آپدیت پیام: {e}")
             break
 
         page += 1
 
-print("سلف آماده است.")
+print("🚀 سلف آماده است. دستور !start_gift @user را روی پیام لیست ریپلای کنید.")
 app.run()
