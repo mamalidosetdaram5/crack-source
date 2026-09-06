@@ -7,7 +7,6 @@ api_hash = "6fc091b004de021d44c76f01e27fe91c"  # <-- هش خودت
 
 app = Client("my_autogift_session", api_id=api_id, api_hash=api_hash)
 
-# ⭐️ آیدی عددی بات (همونی که گفتی)
 BOT_ID = 8307651649 
 DELAY_BETWEEN_GIFTS = 3
 DELAY_AFTER_PAGE = 2
@@ -17,44 +16,40 @@ def extract_numbers(content):
     return re.findall(r'\[(\d+)\]', content)
 
 async def wait_for_bot_and_confirm(client, chat_id, sent_msg_id):
-    """⏳ منتظر می‌مونه تا بات جواب بده (حتی اگر عکس/ویدیو باشه) و دکمه ✅ رو می‌زنه"""
+    """⏳ منتظر می‌مونه تا بات جواب بده و دکمه سمت چپ (تایید) رو می‌زنه"""
     print(f"⏳ در انتظار پاسخ بات (ID: {BOT_ID}) برای پیام {sent_msg_id}...")
     start_time = asyncio.get_event_loop().time()
-    timeout = 30  # ۳۰ ثانیه زمان می‌دیم به بات
+    timeout = 5  
     
     while asyncio.get_event_loop().time() - start_time < timeout:
         async for msg in client.get_chat_history(chat_id, limit=30):
-            # چک می‌کنه که پیام حتماً از طرف بات مورد نظر باشه
             if msg.from_user and msg.from_user.id == BOT_ID:
-                # چک می‌کنه که پیام بات، ریپلای به پیام گیفت ما باشه
                 if msg.reply_to_message and msg.reply_to_message.id == sent_msg_id:
                     print(f"🤖 پاسخ بات پیدا شد! (نوع: {msg.media or 'Text'})")
                     
-                    # 1. اول دنبال دکمه ✅ توی کیبورد شیشه‌ای می‌گرده
                     if msg.reply_markup and msg.reply_markup.inline_keyboard:
-                        for row in msg.reply_markup.inline_keyboard:
-                            for btn in row:
-                                if "✅" in btn.text:
-                                    print(f"🖱️ کلیک روی دکمه تایید: {btn.text}")
-                                    try:
-                                        await client.request_callback_answer(chat_id, msg.id, btn.callback_data)
-                                        print("✅ دکمه تایید با موفقیت کلیک شد.")
-                                        return True
-                                    except Exception as e:
-                                        print(f"❌ خطا در کلیک دکمه: {e}")
+                        # ⭐️ تغییر مهم: کلیک روی اولین دکمه (سمت چپ) بدون چک کردن متن
+                        first_row = msg.reply_markup.inline_keyboard[0]
+                        if first_row:
+                            left_btn = first_row[0] # اولین دکمه از سمت چپ
+                            print(f"🖱️ کلیک روی دکمه سمت چپ: {left_btn.text}")
+                            try:
+                                await client.request_callback_answer(chat_id, msg.id, left_btn.callback_data)
+                                print("✅ دکمه سمت چپ با موفقیت کلیک شد.")
+                                return True
+                            except Exception as e:
+                                print(f"❌ خطا در کلیک دکمه: {e}")
                     
-                    # 2. ⭐️ تغییر مهم: چک کردن هم متن و هم کپشن (برای عکس و ویدیو)
+                    # اگر به هر دلیلی دکمه نداشت، چک می‌کنه تو متن/کپشن ✅ باشه
                     content = msg.text or msg.caption or ""
                     if "✅" in content:
                         print("✅ علامت تایید در متن یا کپشن پیام بات پیدا شد.")
                         return True
                         
-                    print(f"⚠️ بات جواب داد ولی ✅ پیدا نشد. محتوا: {content[:50]}")
-                    # اگر بات جواب داد (مثلاً گفت "already gifted") ولی دکمه نداشت، 
-                    # بهتره بره عدد بعدی تا گیر نکنه
+                    print(f"⚠️ بات جواب داد ولی دکمه‌ای نداشت. محتوا: {content[:50]}")
                     return True 
                     
-        await asyncio.sleep(1) # هر یک ثانیه چت رو چک می‌کنه
+        await asyncio.sleep(1) 
         
     print("⚠️ تایم اوت: بات جواب نداد.")
     return False
@@ -89,7 +84,7 @@ async def auto_gift(client, message):
             
             if (uname and uname.lower() == target_clean.lower()) or (uid == target_clean):
                 user_msg = msg
-                print(f"✅ پیام معتبر پیدا شد! ID: {msg.id} (نوع: {msg.media or 'Text'})")
+                print(f"✅ پیام معتبر پیدا شد! ID: {msg.id}")
                 break
 
     if not user_msg:
@@ -130,12 +125,12 @@ async def auto_gift(client, message):
                 await message.reply_text(f"❌ خطا: {e}")
                 break
 
-            # ⭐️ اینجا منتظر می‌مونه تا بات جواب بده (عکس/ویدیو/متن) و دکمه ✅ رو بزنه
+            # ⭐️ اینجا منتظر می‌مونه تا بات جواب بده و دکمه سمت چپ رو بزنه
             await wait_for_bot_and_confirm(client, message.chat.id, sent.id)
             
             await asyncio.sleep(DELAY_BETWEEN_GIFTS)
 
-        # ⭐️ آپدیت کردن پیام مرجع برای گرفتن دکمه‌های جدید
+        # آپدیت کردن پیام مرجع برای گرفتن دکمه‌های جدید
         try:
             current_msg = await client.get_messages(current_msg.chat.id, current_msg.id)
             print("🔄 پیام مرجع آپدیت شد (دکمه‌های جدید بررسی می‌شن).")
@@ -143,7 +138,7 @@ async def auto_gift(client, message):
             print(f"❌ خطا در آپدیت پیام مرجع: {e}")
             break
 
-        # پیدا کردن دکمه صفحه بعد (➡️) روی پیام مرجعِ آپدیت شده
+        # پیدا کردن دکمه صفحه بعد (➡️) روی پیام مرجع
         next_found = False
         if current_msg.reply_markup and current_msg.reply_markup.inline_keyboard:
             for row in current_msg.reply_markup.inline_keyboard:
