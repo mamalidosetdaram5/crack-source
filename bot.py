@@ -1,217 +1,143 @@
-"""
-Selfbot - Auto Forward & Extract Bot Response
-============================================
-دستورات:
-  .enable <group_id> <user_id>  - فعال کردن برای یه گروه و یه کاربر
-  .disable <group_id>            - غیرفعال کردن
-  .captions add <caption>        - اضافه کردن کپشن (عمومی برای همه گروه‌ها)
-  .captions remove <caption>     - حذف کپشن
-  .captions list                 - لیست همه کپشن‌ها
-  .status                        - وضعیت فعلی
-"""
+from pyrogram import Client, filters
+import re
+import asyncio
+ 
+api_id = 29206821  # <-- آیدی خودت رو بذار
+api_hash = "6fc091b004de021d44c76f01e27fe91c"  # <-- هش خودت رو بذار
 
-from telethon import TelegramClient, events
-import json, os, re, asyncio
+app = Client("my_autogift_session", api_id=api_id, api_hash=api_hash)
 
-# ─── تنظیمات ────────────────────────────────────────────────────────────────
-API_ID   = 29206821          # ← API ID خودت رو بذار
-API_HASH = "6fc091b004de021d44c76f01e27fe91c"    # ← API Hash خودت رو بذار
-SESSION  = "selfbot"  # اسم فایل session
+DELAY_BETWEEN_GIFTS = 3
+DELAY_AFTER_PAGE = 2
 
-# دیلی قبل از ارسال دستور توی گروه (ثانیه)
-SEND_DELAY = 1.2
+def extract_numbers(text):
+    if not text:
+        return []
+    return re.findall(r'\[(\d+)\]', text)
 
-# ایدی ربات که پیام بهش فوروارد میشه
-PICKER_BOT = "zswaifu_cheat_bot"
+async def click_confirm(client, chat_id, reply_msg_id):
+    await asyncio.sleep(1.5)
+    try:
+        async for msg in app.get_chat_history(chat_id, limit=15):
+            if msg.reply_to_message and msg.reply_to_message.id == reply_msg_id:
+                if msg.reply_markup and msg.reply_markup.inline_keyboard:
+                    for row in msg.reply_markup.inline_keyboard:
+                        for btn in row:
+                            if "✅" in btn.text:
+                                await client.request_callback_answer(chat_id, msg.id, btn.callback_data)
+                                return True
+                if msg.text and "✅" in msg.text:
+                    return True
+                break
+    except Exception as e:
+        print(f"خطا در تایید: {e}")
+    return False
 
-# ─── Config ─────────────────────────────────────────────────────────────────
-CONFIG_FILE = "selfbot_config.json"
-
-# ساختار:
-# {
-#   "captions": ["caption1", "caption2", ...],   ← عمومی برای همه گروه‌ها
-#   "groups": { "group_id": user_id, ... }
-# }
-
-def load_config():
-    if os.path.exists(CONFIG_FILE):
-        with open(CONFIG_FILE) as f:
-            data = json.load(f)
-            # مطمئن شو هر دو کلید وجود دارن
-            data.setdefault("captions", [])
-            data.setdefault("groups", {})
-            return data
-    return {"captions": [], "groups": {}}
-
-def save_config():
-    with open(CONFIG_FILE, "w") as f:
-        json.dump(config, f, ensure_ascii=False, indent=2)
-
-config = load_config()
-
-# pending: { group_id_str: chat_id }
-pending = {}
-
-# ─── Client ─────────────────────────────────────────────────────────────────
-client = TelegramClient(SESSION, API_ID, API_HASH)
-
-
-# ─── دستورات مدیریتی ────────────────────────────────────────────────────────
-
-@client.on(events.NewMessage(outgoing=True, pattern=r'\.enable\s+(-?\d+)\s+(\d+)'))
-async def cmd_enable(event):
-    group_id = str(int(event.pattern_match.group(1)))
-    user_id  = int(event.pattern_match.group(2))
-    config["groups"][group_id] = user_id
-    save_config()
-    await event.edit(f"✅ فعال شد برای گروه `{group_id}` — کاربر: `{user_id}`")
-
-
-@client.on(events.NewMessage(outgoing=True, pattern=r'\.disable\s+(-?\d+)'))
-async def cmd_disable(event):
-    group_id = str(int(event.pattern_match.group(1)))
-    if group_id in config["groups"]:
-        del config["groups"][group_id]
-        save_config()
-        await event.edit(f"🔴 غیرفعال شد برای گروه `{group_id}`")
-    else:
-        await event.edit("❌ این گروه فعال نبود.")
-
-
-@client.on(events.NewMessage(outgoing=True, pattern=r'\.captions\s+add\s+(.+)'))
-async def cmd_caption_add(event):
-    caption = event.pattern_match.group(1).strip()
-    if caption not in config["captions"]:
-        config["captions"].append(caption)
-        save_config()
-        await event.edit(f"✅ کپشن اضافه شد:\n`{caption}`")
-    else:
-        await event.edit(f"⚠️ این کپشن قبلاً وجود داشت:\n`{caption}`")
-
-
-@client.on(events.NewMessage(outgoing=True, pattern=r'\.captions\s+remove\s+(.+)'))
-async def cmd_caption_remove(event):
-    caption = event.pattern_match.group(1).strip()
-    if caption in config["captions"]:
-        config["captions"].remove(caption)
-        save_config()
-        await event.edit(f"✅ کپشن حذف شد:\n`{caption}`")
-    else:
-        await event.edit("❌ کپشن پیدا نشد.")
-
-
-@client.on(events.NewMessage(outgoing=True, pattern=r'\.captions\s+list'))
-async def cmd_caption_list(event):
-    if not config["captions"]:
-        await event.edit("📋 هیچ کپشنی ثبت نشده.")
-        return
-    lines = "\n".join(f"{i+1}. `{c}`" for i, c in enumerate(config["captions"]))
-    await event.edit(f"📋 **کپشن‌های فعال ({len(config['captions'])}):**\n{lines}")
-
-
-@client.on(events.NewMessage(outgoing=True, pattern=r'\.helps'))
-async def cmd_help(event):
-    await event.edit(
-        "📖 **راهنمای دستورات Selfbot**\n\n"
-
-        "**⚙️ مدیریت گروه‌ها:**\n"
-        "`.enable <group_id> <user_id>`\n"
-        "  └ فعال کردن برای یه گروه و کاربر مشخص\n\n"
-        "`.disable <group_id>`\n"
-        "  └ غیرفعال کردن یه گروه\n\n"
-
-        "**📋 مدیریت کپشن‌ها (عمومی):**\n"
-        "`.captions add <متن>`\n"
-        "  └ اضافه کردن کپشن جدید\n\n"
-        "`.captions remove <متن>`\n"
-        "  └ حذف یه کپشن\n\n"
-        "`.captions list`\n"
-        "  └ دیدن لیست همه کپشن‌ها\n\n"
-
-        "**📊 وضعیت:**\n"
-        "`.status`\n"
-        "  └ نمایش گروه‌های فعال و کپشن‌های ثبت‌شده\n\n"
-
-        "`.helps`\n"
-        "  └ نمایش همین راهنما\n\n"
-
-        "**💡 نکات:**\n"
-        "• کپشن‌ها برای همه گروه‌ها مشترکن\n"
-        "• دیلی ارسال دستور: `1.5` ثانیه\n"
-        "• تنظیمات توی `selfbot_config.json` ذخیره میشن"
-    )
-
-
-@client.on(events.NewMessage(outgoing=True, pattern=r'\.status'))
-async def cmd_status(event):
-    groups = config["groups"]
-    captions = config["captions"]
-
-    if not groups:
-        groups_text = "هیچ گروهی فعال نیست."
-    else:
-        groups_text = "\n".join(f"• گروه `{gid}` — کاربر `{uid}`" for gid, uid in groups.items())
-
-    caps_text = "\n".join(f"  {i+1}. `{c}`" for i, c in enumerate(captions)) if captions else "  —"
-
-    await event.edit(
-        f"📊 **وضعیت:**\n\n"
-        f"**گروه‌های فعال:**\n{groups_text}\n\n"
-        f"**کپشن‌های عمومی:**\n{caps_text}"
-    )
-
-
-# ─── شنیدن پیام‌های گروه ────────────────────────────────────────────────────
-
-@client.on(events.NewMessage(incoming=True))
-async def on_group_message(event):
-    if not event.is_group and not event.is_channel:
+@app.on_message(filters.command("start_gift", prefixes="!"))
+async def auto_gift(client, message):
+    if not message.reply_to_message:
+        await message.reply_text("روی پیام لیست ریپلای کن.")
         return
 
-    group_id = str(event.chat_id)
-    if group_id not in config["groups"]:
+    if len(message.command) < 2:
+        await message.reply_text("آیدی شخص رو بنویس. مثال: !start_gift @user")
         return
 
-    user_id  = config["groups"][group_id]
-    captions = config["captions"]
+    target_msg = message.reply_to_message
+    target_user = message.command[1]
 
-    if event.sender_id != user_id:
+    await message.reply_text("در حال جستجو...")
+    print("🔍 شروع جستجو برای شخص مورد نظر...")
+
+    user_msg = None
+    async for msg in client.get_chat_history(message.chat.id, limit=200):
+        if msg.from_user:
+            uname = msg.from_user.username
+            if uname and uname.lower() == target_user.strip("@").lower():
+                user_msg = msg
+                break
+            if str(msg.from_user.id) == target_user.strip("@"):
+                user_msg = msg
+                break
+
+    if not user_msg:
+        await message.reply_text("پیام شخص پیدا نشد.")
         return
 
-    if not captions:
-        return
+    # ⭐️ چاپ اطلاعات شخص برای اطمینان در CMD
+    print(f"✅ شخص پیدا شد. نام: {user_msg.from_user.first_name} | ID پیام: {user_msg.id}")
+    await message.reply_text(f"شخص پیدا شد: {user_msg.from_user.first_name}. شروع گیفت...")
 
-    msg_text = (event.message.message or "").strip()
-    if not any(cap.lower() in msg_text.lower() for cap in captions):
-        return
+    current_msg = target_msg
+    page = 1
 
-    # فوروارد به ربات
-    bot = await client.get_entity(PICKER_BOT)
-    await client.forward_messages(bot, event.message)
-    pending[group_id] = event.chat_id
-    print(f"[+] پیام فوروارد شد به {PICKER_BOT}")
+    while True:
+        print(f"\n--- بررسی صفحه {page} ---")
 
+        if not current_msg.text:
+            print("⚠️ پیام لیست متن ندارد.")
+            break
 
-# ─── شنیدن جواب ربات ────────────────────────────────────────────────────────
+        numbers = extract_numbers(current_msg.text)
+        print(f"🔢 اعداد پیدا شده: {numbers}")
 
-@client.on(events.NewMessage(incoming=True, from_users=PICKER_BOT))
-async def on_bot_response(event):
-    text = event.message.message or ""
+        if not numbers:
+            await message.reply_text(f"صفحه {page} عددی نداشت.")
+            break
 
-    match = re.search(r'(/pick@\S+\s+\S+)', text)
-    if not match:
-        return
+        for num in numbers:
+            print(f"📤 در حال ارسال /gift {num} به عنوان ریپلای روی پیام ID: {user_msg.id}")
+            try:
+                # ⭐️ استفاده از send_message برای اطمینان ۱۰۰٪ از ریپلای شدن
+                sent = await client.send_message(
+                    chat_id=message.chat.id,
+                    text=f"/gift {num}",
+                    reply_to_message_id=user_msg.id
+                )
+                print(f"✅ پیام ارسال و ریپلای شد. ID پیام جدید: {sent.id}")
+            except Exception as e:
+                print(f"❌ خطا در ارسال: {e}")
+                await message.reply_text(f"خطا: {e}")
+                break
 
-    command = match.group(1).strip()
+            await click_confirm(client, message.chat.id, sent.id)
+            await asyncio.sleep(DELAY_BETWEEN_GIFTS)
 
-    for group_id, chat_id in list(pending.items()):
-        await asyncio.sleep(SEND_DELAY)
-        await client.send_message(chat_id, command)
-        print(f"[+] دستور ارسال شد به گروه {chat_id}: {command}")
-        del pending[group_id]
+        next_found = False
+        if current_msg.reply_markup and current_msg.reply_markup.inline_keyboard:
+            for row in current_msg.reply_markup.inline_keyboard:
+                for btn in row:
+                    if "➡" in btn.text or "Next" in btn.text:
+                        print(f"➡️ دکمه بعدی پیدا شد: {btn.text}")
+                        try:
+                            await client.request_callback_answer(
+                                current_msg.chat.id,
+                                current_msg.id,
+                                btn.callback_data
+                            )
+                            next_found = True
+                        except Exception as e:
+                            print(f"خطا دکمه: {e}")
+                        break
+                if next_found:
+                    break
 
+        if not next_found:
+            print("🏁 دکمه بعدی نیست. پایان.")
+            await message.reply_text("پایان. دکمه بعدی نیست.")
+            break
 
-# ─── اجرا ───────────────────────────────────────────────────────────────────
-print("🤖 Selfbot در حال اجراست...")
-client.start()
-client.run_until_disconnected()
+        await asyncio.sleep(DELAY_AFTER_PAGE)
+
+        try:
+            current_msg = await client.get_messages(
+                current_msg.chat.id, current_msg.id
+            )
+        except Exception as e:
+            print(f"خطا آپدیت: {e}")
+            break
+
+        page += 1
+
+print("سلف آماده است.")
+app.run()
