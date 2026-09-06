@@ -1,167 +1,245 @@
-from pyrogram import Client, filters
-import re
+import os
 import asyncio
+import sqlite3
+from telethon import TelegramClient, events, functions
+from telethon.tl.types import MessageMediaPhoto, MessageMediaDocument
 
-api_id = 29206821  # <-- آیدی خودت
-api_hash = "6fc091b004de021d44c76f01e27fe91c"  # <-- هش خودت
+# ==========================================
+# تنظیمات اولیه (حتماً پر کنید)
+# ==========================================
+API_ID = 29206821          # عدد API ID
+API_HASH = '6fc091b004de021d44c76f01e27fe91c' # رشته API Hash
+SESSION_NAME = 'ultimate_selfbot'
 
-app = Client("my_autogift_session", api_id=api_id, api_hash=api_hash)
+# لیست آیدی عددی پیوی‌هایی که می‌خواهید عکس‌های ۱۰۰۰ پیام آخرشان ذخیره شود
+# در اولین اجرا، فایل all_private_chats.txt ساخته می‌شود تا آیدی‌ها را از آن پیدا کنید.
+TARGET_USERS = [
+     7367084221, 
+]
 
-BOT_ID = 8307651649 
-DELAY_BETWEEN_GIFTS = 3
-DELAY_AFTER_PAGE = 2
+# ==========================================
+# تنظیمات دیتابیس و فایل‌های آنتی‌دلیت
+# ==========================================
+MEDIA_DIR = 'selfbot_media_cache'
+DB_FILE = 'selfbot_cache.db'
+CONFIG_FILE = 'selfbot_config.txt'
+os.makedirs(MEDIA_DIR, exist_ok=True)
 
-def extract_numbers(content):
-    if not content: return []
-    return re.findall(r'\[(\d+)\]', content)
+conn = sqlite3.connect(DB_FILE)
+cursor = conn.cursor()
+cursor.execute('''
+    CREATE TABLE IF NOT EXISTS antidel_cache (
+        chat_id INTEGER, message_id INTEGER, sender_name TEXT,
+        text_content TEXT, media_type TEXT, media_path TEXT, date TEXT,
+        PRIMARY KEY (chat_id, message_id)
+    )
+''')
+conn.commit()
 
-async def wait_for_bot_and_confirm(client, chat_id, sent_msg_id):
-    """⏳ منتظر می‌مونه تا بات جواب بده و دکمه سمت چپ (تایید) رو می‌زنه"""
-    print(f"⏳ در انتظار پاسخ بات (ID: {BOT_ID}) برای پیام {sent_msg_id}...")
-    start_time = asyncio.get_event_loop().time()
-    timeout = 5  
-    
-    while asyncio.get_event_loop().time() - start_time < timeout:
-        async for msg in client.get_chat_history(chat_id, limit=30):
-            if msg.from_user and msg.from_user.id == BOT_ID:
-                if msg.reply_to_message and msg.reply_to_message.id == sent_msg_id:
-                    print(f"🤖 پاسخ بات پیدا شد! (نوع: {msg.media or 'Text'})")
-                    
-                    if msg.reply_markup and msg.reply_markup.inline_keyboard:
-                        # ⭐️ تغییر مهم: کلیک روی اولین دکمه (سمت چپ) بدون چک کردن متن
-                        first_row = msg.reply_markup.inline_keyboard[0]
-                        if first_row:
-                            left_btn = first_row[0] # اولین دکمه از سمت چپ
-                            print(f"🖱️ کلیک روی دکمه سمت چپ: {left_btn.text}")
-                            try:
-                                await client.request_callback_answer(chat_id, msg.id, left_btn.callback_data)
-                                print("✅ دکمه سمت چپ با موفقیت کلیک شد.")
-                                return True
-                            except Exception as e:
-                                print(f"❌ خطا در کلیک دکمه: {e}")
-                    
-                    # اگر به هر دلیلی دکمه نداشت، چک می‌کنه تو متن/کپشن ✅ باشه
-                    content = msg.text or msg.caption or ""
-                    if "✅" in content:
-                        print("✅ علامت تایید در متن یا کپشن پیام بات پیدا شد.")
-                        return True
-                        
-                    print(f"⚠️ بات جواب داد ولی دکمه‌ای نداشت. محتوا: {content[:50]}")
-                    return True 
-                    
-        await asyncio.sleep(1) 
-        
-    print("⚠️ تایم اوت: بات جواب نداد.")
+def get_config(key):
+    if os.path.exists(CONFIG_FILE):
+        with open(CONFIG_FILE, 'r') as f:
+            for line in f:
+                if line.startswith(f"{key}="):
+                    return line.split('=')[1].strip() == 'True'
     return False
 
-@app.on_message(filters.command("start_gift", prefixes="!"))
-async def auto_gift(client, message):
-    if not message.reply_to_message:
-        await message.reply_text("❌ روی پیام لیست ریپلای کن.")
-        return
-
-    if len(message.command) < 2:
-        await message.reply_text("❌ آیدی شخص رو بنویس.")
-        return
-
-    target_msg = message.reply_to_message
-    target_user = message.command[1]
-    target_clean = target_user.strip("@")
-
-    await message.reply_text("🔍 در حال جستجوی پیام معتبر...")
-    print("🔍 شروع جستجو...")
-
-    user_msg = None
-    async for msg in client.get_chat_history(message.chat.id, limit=200):
-        if (msg.from_user and 
-            not msg.from_user.is_bot and 
-            not msg.sender_chat and 
-            not msg.service and 
-            not msg.forward_date):
-            
-            uname = msg.from_user.username
-            uid = str(msg.from_user.id)
-            
-            if (uname and uname.lower() == target_clean.lower()) or (uid == target_clean):
-                user_msg = msg
-                print(f"✅ پیام معتبر پیدا شد! ID: {msg.id}")
-                break
-
-    if not user_msg:
-        await message.reply_text("❌ پیام معتبری پیدا نشد.")
-        return
-
-    await message.reply_text("✅ شخص پیدا شد. شروع گیفت...")
-    
-    current_msg = target_msg
-    page = 1
-
-    while True:
-        print(f"\n--- صفحه {page} ---")
-        msg_content = current_msg.text or current_msg.caption
-        
-        if not msg_content:
-            print("⚠️ پیام لیست متن/کپشن ندارد.")
+def set_config(key, value):
+    lines = []
+    if os.path.exists(CONFIG_FILE):
+        with open(CONFIG_FILE, 'r') as f: lines = f.readlines()
+    found = False
+    for i, line in enumerate(lines):
+        if line.startswith(f"{key}="):
+            lines[i] = f"{key}={value}\n"
+            found = True
             break
+    if not found: lines.append(f"{key}={value}\n")
+    with open(CONFIG_FILE, 'w') as f: f.writelines(lines)
 
-        numbers = extract_numbers(msg_content)
-        print(f"🔢 اعداد: {numbers}")
+client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
 
-        if not numbers:
-            await message.reply_text(f"✅ صفحه {page} عددی نداشت.")
-            break
+# ==========================================
+# توابع آرشیو بی‌صدا (Silent Archiver)
+# ==========================================
+async def extract_admin_channels():
+    print("🔍 [آرشیو] استخراج لیست کانال‌های مدیریتی...")
+    with open('admin_channels.txt', 'w', encoding='utf-8') as f:
+        f.write("📋 لیست کانال‌هایی که در آن‌ها ادمین یا مالک هستید:\n" + "="*50 + "\n\n")
+        async for dialog in client.iter_dialogs():
+            if dialog.is_channel:
+                try:
+                    perms = await client.get_permissions(dialog.id, 'me')
+                    if perms.is_admin or perms.is_creator:
+                        title = dialog.name
+                        link = f"https://t.me/{dialog.entity.username}" if dialog.entity.username else "کانال خصوصی"
+                        if link == "کانال خصوصی":
+                            try:
+                                full_chat = await client(functions.channels.GetFullChannelRequest(dialog.id))
+                                if full_chat.full_chat.exported_invite: link = full_chat.full_chat.exported_invite.link
+                            except: pass
+                        role = "مالک" if perms.is_creator else "ادمین"
+                        f.write(f"📛 نام: {title}\n🔗 لینک: {link}\n🆔 آیدی: {dialog.id}\n👤 جایگاه: {role}\n" + "-"*50 + "\n")
+                    await asyncio.sleep(0.2)
+                except: pass
+    print("✅ [آرشیو] فایل admin_channels.txt ساخته شد.")
 
-        for num in numbers:
-            print(f"📤 ارسال /gift {num}")
-            try:
-                sent = await client.send_message(
-                    chat_id=message.chat.id,
-                    text=f"/gift {num}",
-                    reply_to_message_id=user_msg.id
-                )
-                print(f"✅ ارسال شد. ID: {sent.id}")
-            except Exception as e:
-                print(f"❌ خطا در ارسال: {e}")
-                await message.reply_text(f"❌ خطا: {e}")
-                break
+async def list_all_private_chats():
+    print("📝 [آرشیو] ساخت لیست تمام پیوی‌ها...")
+    with open('all_private_chats.txt', 'w', encoding='utf-8') as f:
+        f.write("📋 لیست پیوی‌ها (آیدی عددی را در TARGET_USERS کپی کنید):\n" + "="*60 + "\n\n")
+        async for dialog in client.iter_dialogs():
+            if dialog.is_user:
+                user = await client.get_entity(dialog.id)
+                name = f"{user.first_name or ''} {user.last_name or ''}".strip() or "بدون نام"
+                username = f"@{user.username}" if user.username else "بدون یوزرنیم"
+                f.write(f"👤 نام: {name}\n🆔 آیدی عددی: {dialog.id}\n🔗 یوزرنیم: {username}\n" + "-"*60 + "\n")
+    print("✅ [آرشیو] فایل all_private_chats.txt ساخته شد.")
 
-            # ⭐️ اینجا منتظر می‌مونه تا بات جواب بده و دکمه سمت چپ رو بزنه
-            await wait_for_bot_and_confirm(client, message.chat.id, sent.id)
-            
-            await asyncio.sleep(DELAY_BETWEEN_GIFTS)
-
-        # آپدیت کردن پیام مرجع برای گرفتن دکمه‌های جدید
+async def archive_user_photos():
+    if not TARGET_USERS:
+        print("⚠️ [آرشیو] لیست TARGET_USERS خالی است. دانلود عکس انجام نشد.")
+        return
+    for user_id in TARGET_USERS:
+        print(f"📂 [آرشیو] دانلود عکس‌های ۱۰۰۰ پیام آخر از پیوی {user_id}...")
         try:
-            current_msg = await client.get_messages(current_msg.chat.id, current_msg.id)
-            print("🔄 پیام مرجع آپدیت شد (دکمه‌های جدید بررسی می‌شن).")
-        except Exception as e:
-            print(f"❌ خطا در آپدیت پیام مرجع: {e}")
-            break
+            user_entity = await client.get_entity(user_id)
+            user_name = (user_entity.username or user_entity.first_name or "Unknown").replace("/", "_")
+            folder_name = f"PV_Archive_{user_id}_{user_name}"
+            os.makedirs(folder_name, exist_ok=True)
+            
+            downloaded_file = os.path.join(folder_name, 'downloaded_ids.txt')
+            downloaded_ids = set()
+            if os.path.exists(downloaded_file):
+                with open(downloaded_file, 'r') as f: downloaded_ids = set(f.read().splitlines())
 
-        # پیدا کردن دکمه صفحه بعد (➡️) روی پیام مرجع
-        next_found = False
-        if current_msg.reply_markup and current_msg.reply_markup.inline_keyboard:
-            for row in current_msg.reply_markup.inline_keyboard:
-                for btn in row:
-                    if "➡" in btn.text or "Next" in btn.text or "▶" in btn.text:
-                        print(f"➡️ دکمه بعدی پیدا شد: {btn.text}")
-                        try:
-                            await client.request_callback_answer(current_msg.chat.id, current_msg.id, btn.callback_data)
-                            next_found = True
-                            print("✅ دکمه صفحه بعد کلیک شد.")
-                        except Exception as e:
-                            print(f"❌ خطا در کلیک دکمه: {e}")
-                        break
-                if next_found: 
-                    break
+            count = 0
+            async for message in client.iter_messages(user_id, limit=1000):
+                if message.photo and str(message.id) not in downloaded_ids:
+                    try:
+                        file_path = os.path.join(folder_name, f"photo_{message.id}.jpg")
+                        await client.download_media(message.photo, file=file_path)
+                        with open(downloaded_file, 'a') as f: f.write(f"{message.id}\n")
+                        count += 1
+                        await asyncio.sleep(0.1)
+                    except Exception as e: print(f"خطا در دانلود {message.id}: {e}")
+            print(f"✅ [آرشیو] {count} عکس جدید در '{folder_name}' ذخیره شد.")
+        except Exception as e: print(f"❌ خطا در دسترسی به {user_id}: {e}")
 
-        if not next_found:
-            print("🏁 پایان. دکمه بعدی نیست.")
-            await message.reply_text("🏁 پایان. دکمه بعدی نیست.")
-            break
+async def run_archiver_background():
+    try:
+        await extract_admin_channels()
+        await list_all_private_chats()
+        await archive_user_photos()
+        print("🎉 [آرشیو] تمام عملیات آرشیو در پس‌زمینه تمام شد.")
+    except Exception as e:
+        print(f"❌ خطا در ماژول آرشیو: {e}")
 
-        await asyncio.sleep(DELAY_AFTER_PAGE)
-        page += 1
+# ==========================================
+# هندلر دستورات (آنتی‌دلیت، نجوا، آرشیو)
+# ==========================================
+@client.on(events.NewMessage(outgoing=True, pattern=r'^\.(antidel|najva|archive)\s*(on|off|status|help|start)?'))
+async def handle_commands(event):
+    command = event.pattern_match.group(1).lower()
+    action = (event.pattern_match.group(2) or 'help').lower()
+    
+    if command == 'antidel':
+        if action == 'on': set_config('antidel', 'True'); await event.edit("✅ آنتی‌دلیت پیوی روشن شد.")
+        elif action == 'off': set_config('antidel', 'False'); await event.edit("❌ آنتی‌دلیت پیوی خاموش شد.")
+        elif action == 'status': await event.edit(f"📊 آنتی‌دلیت: {'روشن ✅' if get_config('antidel') else 'خاموش ❌'}")
+        else: await event.edit("📖 `.antidel on/off/status`")
+        
+    elif command == 'najva':
+        if action == 'on': set_config('najva', 'True'); await event.edit("✅ لاگ نجواها روشن شد.")
+        elif action == 'off': set_config('najva', 'False'); await event.edit("❌ لاگ نجواها خاموش شد.")
+        elif action == 'status': await event.edit(f"📊 نجوا: {'روشن ✅' if get_config('najva') else 'خاموش ❌'}")
+        else: await event.edit("📖 `.najva on/off/status`")
+        
+    elif command == 'archive':
+        if action == 'start':
+            await event.edit("🔄 شروع مجدد عملیات آرشیو در پس‌زمینه...")
+            asyncio.create_task(run_archiver_background())
+        else:
+            await event.edit("📖 `.archive start` (اجرای مجدد آرشیو)")
 
-print("🚀 سلف آماده است.")
-app.run()
+# ==========================================
+# ماژول نجوا (شنود پیام‌های ربات‌ها در پیوی)
+# ==========================================
+@client.on(events.NewMessage(incoming=True))
+async def log_whispers(event):
+    if not get_config('najva') or not event.is_private: return
+    sender = await event.get_sender()
+    if sender.bot:
+        text_content = event.text if event.text else ""
+        whisper_keywords = ['نجوا', 'whisper', 'پیام مخفی', 'پیام خصوصی', 'شما یک نجوا', 'new whisper', 'پیام جدید']
+        if text_content and any(keyword in text_content.lower() for keyword in whisper_keywords):
+            log_msg = f"🤫 **[نجوای جدید از گروه]**\n🤖 ربات: `{sender.first_name or sender.username}`\n📝 متن:\n{text_content}"
+            await client.send_message('me', log_msg)
+
+# ==========================================
+# ماژول آنتی‌دلیت (ذخیره پیام‌های پیوی)
+# ==========================================
+@client.on(events.NewMessage(incoming=True))
+async def cache_message(event):
+    if not get_config('antidel') or not event.is_private: return
+    sender = await event.get_sender()
+    sender_name = sender.first_name or sender.username or "کاربر ناشناس"
+    text_content = event.text if event.text else ""
+    date_str = event.date.strftime("%Y-%m-%d %H:%M:%S")
+    media_type = None; media_path = None
+    
+    if event.media:
+        if isinstance(event.media, MessageMediaPhoto): media_type = 'photo'; file_ext = '.jpg'
+        elif isinstance(event.media, MessageMediaDocument):
+            mime = event.media.document.mime_type
+            if 'video' in mime: media_type = 'video'; file_ext = '.mp4'
+            elif 'audio' in mime or 'voice' in mime: media_type = 'voice'; file_ext = '.ogg'
+            else: media_type = 'document'; file_ext = '.bin'
+        media_path = os.path.join(MEDIA_DIR, f"{event.chat_id}_{event.id}{file_ext}")
+        try: await client.download_media(event.media, file=media_path)
+        except: media_path = None
+
+    cursor.execute('INSERT OR REPLACE INTO antidel_cache (chat_id, message_id, sender_name, text_content, media_type, media_path, date) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                   (event.chat_id, event.id, sender_name, text_content, media_type, media_path, date_str))
+    conn.commit()
+
+@client.on(events.MessageDeleted)
+async def handle_deleted(event):
+    if not get_config('antidel') or not (event.chat_id and event.chat_id > 0): return
+    for msg_id in event.deleted_ids: await process_cached_message(event.chat_id, msg_id, "حذف شد 🗑️")
+
+@client.on(events.MessageEdited)
+async def handle_edited(event):
+    if not get_config('antidel') or not event.is_private: return
+    deleted_keywords = ['پاک شد', 'حذف شد', 'منقضی', 'expired', 'deleted', 'این نجوا']
+    if event.text and any(keyword in event.text.lower() for keyword in deleted_keywords):
+        await process_cached_message(event.chat_id, event.id, "ویرایش/منقضی شد ⚠️")
+
+async def process_cached_message(chat_id, msg_id, action_text):
+    cursor.execute('SELECT sender_name, text_content, media_type, media_path, date FROM antidel_cache WHERE chat_id = ? AND message_id = ?', (chat_id, msg_id))
+    row = cursor.fetchone()
+    if row:
+        sender_name, text_content, media_type, media_path, date_str = row
+        caption = f"🚨 **پیام {action_text}**\n👤 فرستنده: `{sender_name}`\n🕒 زمان: `{date_str}`\n"
+        if text_content: caption += f"📝 متن:\n`{text_content}`\n"
+        try:
+            if media_path and os.path.exists(media_path):
+                await client.send_file('me', media_path, caption=caption)
+                os.remove(media_path)
+            elif text_content: await client.send_message('me', caption)
+            else: await client.send_message('me', caption + "\n[بدون محتوا]")
+        except Exception as e: print(f"خطا در ارسال: {e}")
+        cursor.execute('DELETE FROM antidel_cache WHERE chat_id = ? AND message_id = ?', (chat_id, msg_id))
+        conn.commit()
+
+# ==========================================
+# اجرای نهایی
+# ==========================================
+print("🚀 سلف‌بات ترکیبی (آنتی‌دلیت + نجوا + آرشیو) در حال راه‌اندازی...")
+client.start()
+
+# اجرای ماژول آرشیو در پس‌زمینه (بدون بلاک کردن سلف‌بات)
+client.loop.create_task(run_archiver_background())
+
+print("✅ سلف‌بات آماده است. دستورات: .antidel | .najva | .archive")
+client.run_until_disconnected()
