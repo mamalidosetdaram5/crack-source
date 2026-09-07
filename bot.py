@@ -13,14 +13,18 @@ API_HASH = '6fc091b004de021d44c76f01e27fe91c' # رشته API Hash
 SESSION_NAME = 'ultimate_selfbot'
 
 TARGET_USERS = [
-    7367084221
+    8507453664,
+    5403308718,
+    741099256,
+    8818214346,
+    1699487126,
+    1003007465,
     # آیدی عددی پیوی‌هایی که می‌خواهید آرشیو شوند
-    # در اولین اجرا، فایل all_private_chats.txt ساخته می‌شود
 ]
 
 # تنظیمات آپلود عکس
 AUTO_UPLOAD = True
-UPLOAD_SERVICE = 'catbox'  # 'catbox' یا 'imgbb' یا 'imgur'
+UPLOAD_SERVICE = 'catbox'
 IMGUR_CLIENT_ID = ''
 IMGBB_API_KEY = ''
 
@@ -49,7 +53,6 @@ def get_config(key):
             for line in f:
                 if line.startswith(f"{key}="):
                     return line.split('=')[1].strip() == 'True'
-    # پیش‌فرض: همه چیز روشن است
     return True
 
 def set_config(key, value):
@@ -221,22 +224,28 @@ async def run_archiver_background():
 # ==========================================
 # دستورات کنترلی
 # ==========================================
-@client.on(events.NewMessage(outgoing=True, pattern=r'^\.(antidel|najva|archive)\s*(on|off|status|help|start)?'))
+@client.on(events.NewMessage(outgoing=True, pattern=r'^\.(antidel|najva|archive|autodownload)\s*(on|off|status|help|start)?'))
 async def handle_commands(event):
     command = event.pattern_match.group(1).lower()
     action = (event.pattern_match.group(2) or 'help').lower()
     
     if command == 'antidel':
-        if action == 'on': set_config('antidel', 'True'); await event.edit("✅ آنتی‌دلیت روشن شد. (تمام پیوی‌ها)")
+        if action == 'on': set_config('antidel', 'True'); await event.edit("✅ آنتی‌دلیت روشن شد.")
         elif action == 'off': set_config('antidel', 'False'); await event.edit("❌ آنتی‌دلیت خاموش شد.")
         elif action == 'status': await event.edit(f"📊 آنتی‌دلیت: {'روشن ✅' if get_config('antidel') else 'خاموش ❌'}")
-        else: await event.edit("📖 `.antidel on/off/status`\n⚠️ برای تست: پیام طرف مقابل را پاک کنید، نه پیام خودتان را!")
+        else: await event.edit("📖 `.antidel on/off/status`")
         
     elif command == 'najva':
-        if action == 'on': set_config('najva', 'True'); await event.edit("✅ لاگ نجوا روشن شد. (تمام گروه‌ها)")
+        if action == 'on': set_config('najva', 'True'); await event.edit("✅ لاگ نجوا روشن شد.")
         elif action == 'off': set_config('najva', 'False'); await event.edit("❌ لاگ نجوا خاموش شد.")
         elif action == 'status': await event.edit(f"📊 نجوا: {'روشن ✅' if get_config('najva') else 'خاموش ❌'}")
         else: await event.edit("📖 `.najva on/off/status`")
+        
+    elif command == 'autodownload':
+        if action == 'on': set_config('autodownload', 'True'); await event.edit("✅ ذخیره خودکار مدیای تایمردار روشن شد.")
+        elif action == 'off': set_config('autodownload', 'False'); await event.edit("❌ ذخیره خودکار مدیای تایمردار خاموش شد.")
+        elif action == 'status': await event.edit(f"📊 ذخیره خودکار: {'روشن ✅' if get_config('autodownload') else 'خاموش ❌'}")
+        else: await event.edit("📖 `.autodownload on/off/status`\n💡 مدیاهای تایمردار (🔥) را به Saved Messages می‌فرستد.")
         
     elif command == 'archive':
         if action == 'start':
@@ -260,6 +269,46 @@ async def log_whispers(event):
             f"📝 متن:\n{text_content}"
         )
         await client.send_message('me', log_msg)
+
+# ==========================================
+# ماژول ذخیره خودکار مدیای تایمردار
+# ==========================================
+@client.on(events.NewMessage(incoming=True))
+async def save_self_destructing_media(event):
+    if not get_config('autodownload'): return
+    
+    try:
+        # بررسی اینکه آیا پیام مدیای تایمردار دارد
+        if (event.is_private and 
+            event.message.media and 
+            hasattr(event.message.media, 'ttl_seconds') and 
+            event.message.media.ttl_seconds is not None and 
+            event.message.media.ttl_seconds > 0):
+            
+            sender = await event.get_sender()
+            sender_name = sender.first_name or sender.username or "کاربر ناشناس" if sender else "ناشناس"
+            
+            # دانلود مدیا قبل از انقضا
+            file = await event.download_media()
+            
+            if file:
+                caption = (
+                    f"🔥 **[مدیای تایمردار ذخیره شد]**\n\n"
+                    f"👤 فرستنده: `{sender_name}`\n"
+                    f"⏱️ زمان انقضا: `{event.message.media.ttl_seconds} ثانیه`\n"
+                    f"🕒 زمان دریافت: `{event.date.strftime('%Y-%m-%d %H:%M:%S')}`"
+                )
+                
+                # ارسال به Saved Messages
+                await client.send_file('me', file, caption=caption)
+                
+                # پاک کردن فایل از هارد
+                os.remove(file)
+                
+                print(f"✅ مدیای تایمردار از {sender_name} ذخیره و به Saved Messages ارسال شد.")
+    
+    except Exception as e:
+        print(f"❌ خطا در ذخیره مدیای تایمردار: {e}")
 
 # ==========================================
 # ماژول آنتی‌دلیت (تمام پیوی‌ها)
@@ -293,12 +342,10 @@ async def cache_message(event):
 async def handle_deleted(event):
     if not get_config('antidel'): return
     
-    # حالت ۱: chat_id مشخص است (پیوی)
     if event.chat_id and event.chat_id > 0:
         for msg_id in event.deleted_ids:
             await process_cached_message(event.chat_id, msg_id, "حذف شد 🗑️")
     
-    # حالت ۲: chat_id None است (برخی کلاینت‌ها) - باید دیتابیس را چک کنیم
     elif event.chat_id is None:
         for msg_id in event.deleted_ids:
             cursor.execute('SELECT chat_id FROM antidel_cache WHERE message_id = ?', (msg_id,))
@@ -316,11 +363,8 @@ async def handle_edited(event):
         old_text, media_type, media_path, date_str = row
         new_text = event.text or ""
         
-        # اگر متن تغییر کرده، نسخه قبلی را بفرست
         if old_text != new_text:
             await process_cached_message(event.chat_id, event.id, "ویرایش شد ⚠️")
-            
-            # به‌روزرسانی دیتابیس
             cursor.execute('UPDATE antidel_cache SET text_content = ? WHERE chat_id = ? AND message_id = ?', (new_text, event.chat_id, event.id))
             conn.commit()
 
@@ -348,11 +392,15 @@ async def process_cached_message(chat_id, msg_id, action_text):
 # اجرای نهایی
 # ==========================================
 print("🚀 سلف‌بات در حال راه‌اندازی...")
-print("✅ آنتی‌دلیت و نجوا به صورت پیش‌فرض روشن هستند.")
-print("⚠️ نکته مهم: برای تست آنتی‌دلیت، باید پیام طرف مقابل را پاک کنید، نه پیام خودتان را!")
+print("✅ آنتی‌دلیت، نجوا و ذخیره خودکار مدیای تایمردار به صورت پیش‌فرض روشن هستند.")
 client.start()
 
 client.loop.create_task(run_archiver_background())
 
 print("✅ سلف‌بات آماده است.")
+print("📖 دستورات:")
+print("   .antidel on/off/status")
+print("   .najva on/off/status")
+print("   .autodownload on/off/status")
+print("   .archive start")
 client.run_until_disconnected()
