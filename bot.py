@@ -1,56 +1,70 @@
 import requests
 import os
+import shutil
+import time
 
 def upload_to_catbox(file_path):
     """
     فایل مورد نظر را در Catbox آپلود کرده و لینک مستقیم آن را برمی‌گرداند.
     """
-    # بررسی وجود فایل
-    if not os.path.exists(file_path):
-        return "خطا: فایلی با این مسیر وجود ندارد."
-
     url = 'https://catbox.moe/user/api.php'
-    
-    # پارامترهای مورد نیاز برای API کت‌باکس
-    data = {
-        'reqtype': 'fileupload',
-    }
+    data = {'reqtype': 'fileupload'}
     
     try:
-        # باز کردن فایل به صورت باینری و ارسال آن
         with open(file_path, 'rb') as f:
-            files = {
-                'fileToUpload': f
-            }
+            files = {'fileToUpload': f}
             response = requests.post(url, data=data, files=files)
             
-        # بررسی موفقیت آمیز بودن درخواست
         if response.status_code == 200:
-            # پاسخ کت‌باکس در صورت موفقیت، فقط لینک مستقیم فایل است
-            direct_link = response.text.strip()
-            return direct_link
+            return response.text.strip()
         else:
-            return f"خطا در آپلود. کد وضعیت: {response.status_code}\nپیام سرور: {response.text}"
-            
+            return f"خطا در آپلود. کد وضعیت: {response.status_code}\nپیام: {response.text}"
     except Exception as e:
-        return f"یک خطای غیرمنتظره رخ داد: {str(e)}"
+        return f"خطای غیرمنتظره: {str(e)}"
 
-# ================= بخش اجرای کد =================
+def create_zip_from_folder(folder_path):
+    """
+    یک پوشه را به فایل ZIP تبدیل می‌کند.
+    """
+    # گرفتن اسم پوشه و اضافه کردن timestamp برای جلوگیری از تداخل اسم‌ها
+    folder_name = os.path.basename(os.path.abspath(folder_path))
+    timestamp = int(time.time())
+    zip_base_name = f"{folder_name}_{timestamp}"
+    
+    # ساخت فایل زیپ
+    zip_file_path = shutil.make_archive(zip_base_name, 'zip', folder_path)
+    return zip_file_path
 
 if __name__ == "__main__":
-    # مسیر فایل خودت رو اینجا وارد کن (مثلاً: 'C:/test/my_image.png' یا './my_file.zip')
-    file_to_upload = input("لطفاً مسیر کامل فایل را وارد کنید: ").strip()
+    path_input = input("لطفاً مسیر فایل یا پوشه را وارد کنید: ").strip()
+    path_input = path_input.strip('"').strip("'")
     
-    # حذف کاراکترهای اضافی اگر کاربر مسیر را داخل نقل قول وارد کرده باشد
-    file_to_upload = file_to_upload.strip('"').strip("'")
-    
-    print(f"\nدر حال آپلود فایل: {file_to_upload} ...")
-    
-    result = upload_to_catbox(file_to_upload)
-    
-    print("-" * 40)
-    if result.startswith("http"):
-        print("✅ آپلود با موفقیت انجام شد!")
-        print(f"🔗 لینک مستقیم فایل:\n{result}")
+    if not os.path.exists(path_input):
+        print("❌ خطا: مسیر وارد شده در سیستم وجود ندارد.")
     else:
-        print(f"❌ {result}")
+        file_to_upload = path_input
+        is_temp_zip = False
+        
+        # بررسی اینکه آیا مسیر وارد شده پوشه است یا فایل
+        if os.path.isdir(path_input):
+            print(f"\n📁 مسیر وارد شده یک پوشه است. در حال فشرده‌سازی (Zip)...")
+            file_to_upload = create_zip_from_folder(path_input)
+            is_temp_zip = True
+            print(f"✅ پوشه با موفقیت فشرده شد: {os.path.basename(file_to_upload)}")
+        
+        print(f"\n🚀 در حال آپلود: {os.path.basename(file_to_upload)} ...")
+        
+        try:
+            result = upload_to_catbox(file_to_upload)
+            
+            print("-" * 40)
+            if result.startswith("http"):
+                print("✅ آپلود با موفقیت انجام شد!")
+                print(f"🔗 لینک مستقیم:\n{result}")
+            else:
+                print(f"❌ {result}")
+        finally:
+            # پاک کردن فایل زیپ موقت از روی سیستم بعد از اتمام کار (چه موفق چه ناموفق)
+            if is_temp_zip and os.path.exists(file_to_upload):
+                os.remove(file_to_upload)
+                print("\n🧹 فایل زیپ موقت از روی سیستم شما پاک شد.")
