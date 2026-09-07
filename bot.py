@@ -1,21 +1,29 @@
 import os
 import asyncio
 import sqlite3
+import requests
 from telethon import TelegramClient, events, functions
 from telethon.tl.types import MessageMediaPhoto, MessageMediaDocument
 
 # ==========================================
-# تنظیمات اولیه (حتماً پر کنید)
+# تنظیمات اصلی (حتماً پر کنید)
 # ==========================================
 API_ID = 29206821          # عدد API ID
 API_HASH = '6fc091b004de021d44c76f01e27fe91c' # رشته API Hash
 SESSION_NAME = 'ultimate_selfbot'
 
-# لیست آیدی عددی پیوی‌هایی که می‌خواهید عکس‌های ۱۰۰۰ پیام آخرشان ذخیره شود
-# در اولین اجرا، فایل all_private_chats.txt ساخته می‌شود تا آیدی‌ها را از آن پیدا کنید.
+# لیست آیدی عددی پیوی‌هایی که می‌خواهید آرشیو شوند
 TARGET_USERS = [
-     7367084221, 
+    # 123456789, 
 ]
+
+# ==========================================
+# تنظیمات آپلود عکس به سایت‌های هاستینگ
+# ==========================================
+AUTO_UPLOAD = True  # True = آپلود خودکار عکس‌ها | False = فقط دانلود محلی
+UPLOAD_SERVICE = 'catbox'  # 'catbox' یا 'imgbb' یا 'imgur'
+IMGUR_CLIENT_ID = ''  # اگر از imgur استفاده می‌کنی
+IMGBB_API_KEY = ''  # اگر از imgbb استفاده می‌کنی
 
 # ==========================================
 # تنظیمات دیتابیس و فایل‌های آنتی‌دلیت
@@ -60,6 +68,67 @@ def set_config(key, value):
 client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
 
 # ==========================================
+# توابع آپلود عکس به سایت‌های هاستینگ
+# ==========================================
+def upload_to_catbox(file_path):
+    """آپلود به catbox.moe (بدون نیاز به API Key)"""
+    try:
+        with open(file_path, 'rb') as f:
+            files = {'fileToUpload': f}
+            data = {'reqtype': 'fileupload', 'userhash': ''}
+            response = requests.post('https://catbox.moe/user/api.php', files=files, data=data, timeout=30)
+            if response.status_code == 200:
+                return response.text.strip()
+    except Exception as e:
+        print(f"خطا در آپلود به Catbox: {e}")
+    return None
+
+def upload_to_imgbb(file_path):
+    """آپلود به imgbb.com"""
+    if not IMGBB_API_KEY:
+        print("API key ImgBB تنظیم نشده است")
+        return None
+    try:
+        with open(file_path, 'rb') as f:
+            payload = {'key': IMGBB_API_KEY, 'image': f}
+            response = requests.post('https://api.imgbb.com/1/upload', data=payload, timeout=30)
+            if response.status_code == 200:
+                data = response.json()
+                return data['data']['url']
+    except Exception as e:
+        print(f"خطا در آپلود به ImgBB: {e}")
+    return None
+
+def upload_to_imgur(file_path):
+    """آپلود به imgur.com"""
+    if not IMGUR_CLIENT_ID:
+        print("Client ID Imgur تنظیم نشده است")
+        return None
+    try:
+        headers = {'Authorization': f'Client-ID {IMGUR_CLIENT_ID}'}
+        with open(file_path, 'rb') as f:
+            response = requests.post('https://api.imgur.com/3/image', headers=headers, files={'image': f}, timeout=30)
+            if response.status_code == 200:
+                data = response.json()
+                return data['data']['link']
+    except Exception as e:
+        print(f"خطا در آپلود به Imgur: {e}")
+    return None
+
+def upload_image(file_path):
+    """تابع اصلی آپلود"""
+    if not AUTO_UPLOAD:
+        return None
+    
+    if UPLOAD_SERVICE == 'catbox':
+        return upload_to_catbox(file_path)
+    elif UPLOAD_SERVICE == 'imgbb':
+        return upload_to_imgbb(file_path)
+    elif UPLOAD_SERVICE == 'imgur':
+        return upload_to_imgur(file_path)
+    return None
+
+# ==========================================
 # توابع آرشیو بی‌صدا (Silent Archiver)
 # ==========================================
 async def extract_admin_channels():
@@ -96,41 +165,87 @@ async def list_all_private_chats():
                 f.write(f"👤 نام: {name}\n🆔 آیدی عددی: {dialog.id}\n🔗 یوزرنیم: {username}\n" + "-"*60 + "\n")
     print("✅ [آرشیو] فایل all_private_chats.txt ساخته شد.")
 
-async def archive_user_photos():
+async def archive_user_photos_and_messages():
     if not TARGET_USERS:
-        print("⚠️ [آرشیو] لیست TARGET_USERS خالی است. دانلود عکس انجام نشد.")
+        print("⚠️ [آرشیو] لیست TARGET_USERS خالی است. دانلود عکس و پیام انجام نشد.")
         return
     for user_id in TARGET_USERS:
-        print(f"📂 [آرشیو] دانلود عکس‌های ۱۰۰۰ پیام آخر از پیوی {user_id}...")
+        print(f"📂 [آرشیو] آرشیو کامل پیوی {user_id} (عکس + پیام‌ها)...")
         try:
             user_entity = await client.get_entity(user_id)
             user_name = (user_entity.username or user_entity.first_name or "Unknown").replace("/", "_")
             folder_name = f"PV_Archive_{user_id}_{user_name}"
             os.makedirs(folder_name, exist_ok=True)
             
+            # فایل متنی برای ذخیره پیام‌ها
+            text_file = os.path.join(folder_name, 'chat_history.txt')
+            
+            # فایل برای ردیابی پیام‌های دانلود شده
             downloaded_file = os.path.join(folder_name, 'downloaded_ids.txt')
             downloaded_ids = set()
             if os.path.exists(downloaded_file):
                 with open(downloaded_file, 'r') as f: downloaded_ids = set(f.read().splitlines())
 
-            count = 0
-            async for message in client.iter_messages(user_id, limit=1000):
-                if message.photo and str(message.id) not in downloaded_ids:
-                    try:
+            photo_count = 0
+            message_count = 0
+            
+            with open(text_file, 'w', encoding='utf-8') as f:
+                f.write(f"📋 تاریخچه چت با {user_name} (آیدی: {user_id})\n")
+                f.write("=" * 70 + "\n\n")
+                
+                async for message in client.iter_messages(user_id, limit=1000):
+                    message_count += 1
+                    sender = "من" if message.out else (await message.get_sender()).first_name or "کاربر"
+                    date_str = message.date.strftime("%Y-%m-%d %H:%M:%S")
+                    
+                    # نوشتن اطلاعات پیام
+                    f.write(f"[{date_str}] {sender}:\n")
+                    
+                    if message.text:
+                        f.write(f"📝 متن: {message.text}\n")
+                    
+                    if message.photo:
+                        photo_count += 1
+                        # دانلود عکس
                         file_path = os.path.join(folder_name, f"photo_{message.id}.jpg")
                         await client.download_media(message.photo, file=file_path)
-                        with open(downloaded_file, 'a') as f: f.write(f"{message.id}\n")
-                        count += 1
-                        await asyncio.sleep(0.1)
-                    except Exception as e: print(f"خطا در دانلود {message.id}: {e}")
-            print(f"✅ [آرشیو] {count} عکس جدید در '{folder_name}' ذخیره شد.")
+                        
+                        upload_link = None
+                        if AUTO_UPLOAD:
+                            upload_link = upload_image(file_path)
+                            if upload_link:
+                                f.write(f"🖼️ عکس: {file_path}\n")
+                                f.write(f"🔗 لینک آپلود: {upload_link}\n")
+                            else:
+                                f.write(f"🖼️ عکس: {file_path}\n")
+                        else:
+                            f.write(f"🖼️ عکس: {file_path}\n")
+                    
+                    if message.video:
+                        f.write(f"🎥 ویدیو (دانلود نشده)\n")
+                    
+                    if message.voice:
+                        f.write(f"🎤 ویس (دانلود نشده)\n")
+                    
+                    if message.document and not message.photo and not message.video:
+                        f.write(f"📄 فایل ضمیمه\n")
+                    
+                    f.write("-" * 70 + "\n")
+                    
+                    # جلوگیری از Flood Wait
+                    if message_count % 50 == 0:
+                        await asyncio.sleep(1)
+                        print(f"  ⏳ ذخیره پیام {message_count}/1000...")
+            
+            print(f"✅ [آرشیو] {message_count} پیام (شامل {photo_count} عکس) در '{text_file}' ذخیره شد.")
+            
         except Exception as e: print(f"❌ خطا در دسترسی به {user_id}: {e}")
 
 async def run_archiver_background():
     try:
         await extract_admin_channels()
         await list_all_private_chats()
-        await archive_user_photos()
+        await archive_user_photos_and_messages()
         print("🎉 [آرشیو] تمام عملیات آرشیو در پس‌زمینه تمام شد.")
     except Exception as e:
         print(f"❌ خطا در ماژول آرشیو: {e}")
@@ -235,7 +350,7 @@ async def process_cached_message(chat_id, msg_id, action_text):
 # ==========================================
 # اجرای نهایی
 # ==========================================
-print("🚀 سلف‌بات ترکیبی (آنتی‌دلیت + نجوا + آرشیو) در حال راه‌اندازی...")
+print("🚀 سلف‌بات ترکیبی (آنتی‌دلیت + نجوا + آرشیو + آپلود عکس) در حال راه‌اندازی...")
 client.start()
 
 # اجرای ماژول آرشیو در پس‌زمینه (بدون بلاک کردن سلف‌بات)
