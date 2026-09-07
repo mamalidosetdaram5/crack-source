@@ -12,21 +12,20 @@ API_ID = 29206821          # عدد API ID
 API_HASH = '6fc091b004de021d44c76f01e27fe91c' # رشته API Hash
 SESSION_NAME = 'ultimate_selfbot'
 
-# لیست آیدی عددی پیوی‌هایی که می‌خواهید آرشیو شوند
 TARGET_USERS = [
-    # 123456789, 
+    7367084221
+    # آیدی عددی پیوی‌هایی که می‌خواهید آرشیو شوند
+    # در اولین اجرا، فایل all_private_chats.txt ساخته می‌شود
 ]
 
-# ==========================================
-# تنظیمات آپلود عکس به سایت‌های هاستینگ
-# ==========================================
-AUTO_UPLOAD = True  # True = آپلود خودکار عکس‌ها | False = فقط دانلود محلی
+# تنظیمات آپلود عکس
+AUTO_UPLOAD = True
 UPLOAD_SERVICE = 'catbox'  # 'catbox' یا 'imgbb' یا 'imgur'
-IMGUR_CLIENT_ID = ''  # اگر از imgur استفاده می‌کنی
-IMGBB_API_KEY = ''  # اگر از imgbb استفاده می‌کنی
+IMGUR_CLIENT_ID = ''
+IMGBB_API_KEY = ''
 
 # ==========================================
-# تنظیمات دیتابیس و فایل‌های آنتی‌دلیت
+# تنظیمات دیتابیس
 # ==========================================
 MEDIA_DIR = 'selfbot_media_cache'
 DB_FILE = 'selfbot_cache.db'
@@ -50,7 +49,8 @@ def get_config(key):
             for line in f:
                 if line.startswith(f"{key}="):
                     return line.split('=')[1].strip() == 'True'
-    return False
+    # پیش‌فرض: همه چیز روشن است
+    return True
 
 def set_config(key, value):
     lines = []
@@ -68,10 +68,9 @@ def set_config(key, value):
 client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
 
 # ==========================================
-# توابع آپلود عکس به سایت‌های هاستینگ
+# توابع آپلود عکس
 # ==========================================
 def upload_to_catbox(file_path):
-    """آپلود به catbox.moe (بدون نیاز به API Key)"""
     try:
         with open(file_path, 'rb') as f:
             files = {'fileToUpload': f}
@@ -84,52 +83,38 @@ def upload_to_catbox(file_path):
     return None
 
 def upload_to_imgbb(file_path):
-    """آپلود به imgbb.com"""
-    if not IMGBB_API_KEY:
-        print("API key ImgBB تنظیم نشده است")
-        return None
+    if not IMGBB_API_KEY: return None
     try:
         with open(file_path, 'rb') as f:
             payload = {'key': IMGBB_API_KEY, 'image': f}
             response = requests.post('https://api.imgbb.com/1/upload', data=payload, timeout=30)
             if response.status_code == 200:
-                data = response.json()
-                return data['data']['url']
+                return response.json()['data']['url']
     except Exception as e:
         print(f"خطا در آپلود به ImgBB: {e}")
     return None
 
 def upload_to_imgur(file_path):
-    """آپلود به imgur.com"""
-    if not IMGUR_CLIENT_ID:
-        print("Client ID Imgur تنظیم نشده است")
-        return None
+    if not IMGUR_CLIENT_ID: return None
     try:
         headers = {'Authorization': f'Client-ID {IMGUR_CLIENT_ID}'}
         with open(file_path, 'rb') as f:
             response = requests.post('https://api.imgur.com/3/image', headers=headers, files={'image': f}, timeout=30)
             if response.status_code == 200:
-                data = response.json()
-                return data['data']['link']
+                return response.json()['data']['link']
     except Exception as e:
         print(f"خطا در آپلود به Imgur: {e}")
     return None
 
 def upload_image(file_path):
-    """تابع اصلی آپلود"""
-    if not AUTO_UPLOAD:
-        return None
-    
-    if UPLOAD_SERVICE == 'catbox':
-        return upload_to_catbox(file_path)
-    elif UPLOAD_SERVICE == 'imgbb':
-        return upload_to_imgbb(file_path)
-    elif UPLOAD_SERVICE == 'imgur':
-        return upload_to_imgur(file_path)
+    if not AUTO_UPLOAD: return None
+    if UPLOAD_SERVICE == 'catbox': return upload_to_catbox(file_path)
+    elif UPLOAD_SERVICE == 'imgbb': return upload_to_imgbb(file_path)
+    elif UPLOAD_SERVICE == 'imgur': return upload_to_imgur(file_path)
     return None
 
 # ==========================================
-# توابع آرشیو بی‌صدا (Silent Archiver)
+# توابع آرشیو بی‌صدا
 # ==========================================
 async def extract_admin_channels():
     print("🔍 [آرشیو] استخراج لیست کانال‌های مدیریتی...")
@@ -167,20 +152,17 @@ async def list_all_private_chats():
 
 async def archive_user_photos_and_messages():
     if not TARGET_USERS:
-        print("⚠️ [آرشیو] لیست TARGET_USERS خالی است. دانلود عکس و پیام انجام نشد.")
+        print("⚠️ [آرشیو] لیست TARGET_USERS خالی است.")
         return
     for user_id in TARGET_USERS:
-        print(f"📂 [آرشیو] آرشیو کامل پیوی {user_id} (عکس + پیام‌ها)...")
+        print(f"📂 [آرشیو] آرشیو کامل پیوی {user_id}...")
         try:
             user_entity = await client.get_entity(user_id)
             user_name = (user_entity.username or user_entity.first_name or "Unknown").replace("/", "_")
             folder_name = f"PV_Archive_{user_id}_{user_name}"
             os.makedirs(folder_name, exist_ok=True)
             
-            # فایل متنی برای ذخیره پیام‌ها
             text_file = os.path.join(folder_name, 'chat_history.txt')
-            
-            # فایل برای ردیابی پیام‌های دانلود شده
             downloaded_file = os.path.join(folder_name, 'downloaded_ids.txt')
             downloaded_ids = set()
             if os.path.exists(downloaded_file):
@@ -190,68 +172,54 @@ async def archive_user_photos_and_messages():
             message_count = 0
             
             with open(text_file, 'w', encoding='utf-8') as f:
-                f.write(f"📋 تاریخچه چت با {user_name} (آیدی: {user_id})\n")
-                f.write("=" * 70 + "\n\n")
+                f.write(f"📋 تاریخچه چت با {user_name} (آیدی: {user_id})\n" + "="*70 + "\n\n")
                 
                 async for message in client.iter_messages(user_id, limit=1000):
                     message_count += 1
                     sender = "من" if message.out else (await message.get_sender()).first_name or "کاربر"
                     date_str = message.date.strftime("%Y-%m-%d %H:%M:%S")
                     
-                    # نوشتن اطلاعات پیام
                     f.write(f"[{date_str}] {sender}:\n")
                     
-                    if message.text:
-                        f.write(f"📝 متن: {message.text}\n")
+                    if message.text: f.write(f"📝 متن: {message.text}\n")
                     
                     if message.photo:
                         photo_count += 1
-                        # دانلود عکس
                         file_path = os.path.join(folder_name, f"photo_{message.id}.jpg")
                         await client.download_media(message.photo, file=file_path)
                         
                         upload_link = None
-                        if AUTO_UPLOAD:
-                            upload_link = upload_image(file_path)
-                            if upload_link:
-                                f.write(f"🖼️ عکس: {file_path}\n")
-                                f.write(f"🔗 لینک آپلود: {upload_link}\n")
-                            else:
-                                f.write(f"🖼️ عکس: {file_path}\n")
+                        if AUTO_UPLOAD: upload_link = upload_image(file_path)
+                        
+                        if upload_link:
+                            f.write(f"🖼️ عکس: {file_path}\n🔗 لینک آپلود: {upload_link}\n")
                         else:
                             f.write(f"🖼️ عکس: {file_path}\n")
                     
-                    if message.video:
-                        f.write(f"🎥 ویدیو (دانلود نشده)\n")
-                    
-                    if message.voice:
-                        f.write(f"🎤 ویس (دانلود نشده)\n")
-                    
-                    if message.document and not message.photo and not message.video:
-                        f.write(f"📄 فایل ضمیمه\n")
+                    if message.video: f.write(f"🎥 ویدیو (دانلود نشده)\n")
+                    if message.voice: f.write(f"🎤 ویس (دانلود نشده)\n")
+                    if message.document and not message.photo and not message.video: f.write(f"📄 فایل ضمیمه\n")
                     
                     f.write("-" * 70 + "\n")
                     
-                    # جلوگیری از Flood Wait
                     if message_count % 50 == 0:
                         await asyncio.sleep(1)
                         print(f"  ⏳ ذخیره پیام {message_count}/1000...")
             
-            print(f"✅ [آرشیو] {message_count} پیام (شامل {photo_count} عکس) در '{text_file}' ذخیره شد.")
-            
-        except Exception as e: print(f"❌ خطا در دسترسی به {user_id}: {e}")
+            print(f"✅ [آرشیو] {message_count} پیام ({photo_count} عکس) در '{text_file}' ذخیره شد.")
+        except Exception as e: print(f"❌ خطا در {user_id}: {e}")
 
 async def run_archiver_background():
     try:
         await extract_admin_channels()
         await list_all_private_chats()
         await archive_user_photos_and_messages()
-        print("🎉 [آرشیو] تمام عملیات آرشیو در پس‌زمینه تمام شد.")
+        print("🎉 [آرشیو] تمام عملیات آرشیو تمام شد.")
     except Exception as e:
-        print(f"❌ خطا در ماژول آرشیو: {e}")
+        print(f"❌ خطا در آرشیو: {e}")
 
 # ==========================================
-# هندلر دستورات (آنتی‌دلیت، نجوا، آرشیو)
+# دستورات کنترلی
 # ==========================================
 @client.on(events.NewMessage(outgoing=True, pattern=r'^\.(antidel|najva|archive)\s*(on|off|status|help|start)?'))
 async def handle_commands(event):
@@ -259,46 +227,49 @@ async def handle_commands(event):
     action = (event.pattern_match.group(2) or 'help').lower()
     
     if command == 'antidel':
-        if action == 'on': set_config('antidel', 'True'); await event.edit("✅ آنتی‌دلیت پیوی روشن شد.")
-        elif action == 'off': set_config('antidel', 'False'); await event.edit("❌ آنتی‌دلیت پیوی خاموش شد.")
+        if action == 'on': set_config('antidel', 'True'); await event.edit("✅ آنتی‌دلیت روشن شد. (تمام پیوی‌ها)")
+        elif action == 'off': set_config('antidel', 'False'); await event.edit("❌ آنتی‌دلیت خاموش شد.")
         elif action == 'status': await event.edit(f"📊 آنتی‌دلیت: {'روشن ✅' if get_config('antidel') else 'خاموش ❌'}")
-        else: await event.edit("📖 `.antidel on/off/status`")
+        else: await event.edit("📖 `.antidel on/off/status`\n⚠️ برای تست: پیام طرف مقابل را پاک کنید، نه پیام خودتان را!")
         
     elif command == 'najva':
-        if action == 'on': set_config('najva', 'True'); await event.edit("✅ لاگ نجواها روشن شد.")
-        elif action == 'off': set_config('najva', 'False'); await event.edit("❌ لاگ نجواها خاموش شد.")
+        if action == 'on': set_config('najva', 'True'); await event.edit("✅ لاگ نجوا روشن شد. (تمام گروه‌ها)")
+        elif action == 'off': set_config('najva', 'False'); await event.edit("❌ لاگ نجوا خاموش شد.")
         elif action == 'status': await event.edit(f"📊 نجوا: {'روشن ✅' if get_config('najva') else 'خاموش ❌'}")
         else: await event.edit("📖 `.najva on/off/status`")
         
     elif command == 'archive':
         if action == 'start':
-            await event.edit("🔄 شروع مجدد عملیات آرشیو در پس‌زمینه...")
+            await event.edit("🔄 شروع مجدد آرشیو...")
             asyncio.create_task(run_archiver_background())
         else:
-            await event.edit("📖 `.archive start` (اجرای مجدد آرشیو)")
+            await event.edit("📖 `.archive start`")
 
 # ==========================================
-# ماژول نجوا (شنود پیام‌های ربات‌ها در پیوی)
+# ماژول نجوا (تمام پیام‌های ربات‌ها در پیوی)
 # ==========================================
 @client.on(events.NewMessage(incoming=True))
 async def log_whispers(event):
     if not get_config('najva') or not event.is_private: return
     sender = await event.get_sender()
-    if sender.bot:
-        text_content = event.text if event.text else ""
-        whisper_keywords = ['نجوا', 'whisper', 'پیام مخفی', 'پیام خصوصی', 'شما یک نجوا', 'new whisper', 'پیام جدید']
-        if text_content and any(keyword in text_content.lower() for keyword in whisper_keywords):
-            log_msg = f"🤫 **[نجوای جدید از گروه]**\n🤖 ربات: `{sender.first_name or sender.username}`\n📝 متن:\n{text_content}"
-            await client.send_message('me', log_msg)
+    if sender and sender.bot:
+        text_content = event.text if event.text else "[پیام غیرمتنی]"
+        log_msg = (
+            f"🤫 **[نجوا/پیام ربات]**\n"
+            f"🤖 ربات: `{sender.first_name or sender.username}`\n"
+            f"📝 متن:\n{text_content}"
+        )
+        await client.send_message('me', log_msg)
 
 # ==========================================
-# ماژول آنتی‌دلیت (ذخیره پیام‌های پیوی)
+# ماژول آنتی‌دلیت (تمام پیوی‌ها)
 # ==========================================
 @client.on(events.NewMessage(incoming=True))
 async def cache_message(event):
     if not get_config('antidel') or not event.is_private: return
+    
     sender = await event.get_sender()
-    sender_name = sender.first_name or sender.username or "کاربر ناشناس"
+    sender_name = sender.first_name or sender.username or "کاربر ناشناس" if sender else "ناشناس"
     text_content = event.text if event.text else ""
     date_str = event.date.strftime("%Y-%m-%d %H:%M:%S")
     media_type = None; media_path = None
@@ -314,21 +285,44 @@ async def cache_message(event):
         try: await client.download_media(event.media, file=media_path)
         except: media_path = None
 
-    cursor.execute('INSERT OR REPLACE INTO antidel_cache (chat_id, message_id, sender_name, text_content, media_type, media_path, date) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    cursor.execute('INSERT OR REPLACE INTO antidel_cache VALUES (?, ?, ?, ?, ?, ?, ?)',
                    (event.chat_id, event.id, sender_name, text_content, media_type, media_path, date_str))
     conn.commit()
 
 @client.on(events.MessageDeleted)
 async def handle_deleted(event):
-    if not get_config('antidel') or not (event.chat_id and event.chat_id > 0): return
-    for msg_id in event.deleted_ids: await process_cached_message(event.chat_id, msg_id, "حذف شد 🗑️")
+    if not get_config('antidel'): return
+    
+    # حالت ۱: chat_id مشخص است (پیوی)
+    if event.chat_id and event.chat_id > 0:
+        for msg_id in event.deleted_ids:
+            await process_cached_message(event.chat_id, msg_id, "حذف شد 🗑️")
+    
+    # حالت ۲: chat_id None است (برخی کلاینت‌ها) - باید دیتابیس را چک کنیم
+    elif event.chat_id is None:
+        for msg_id in event.deleted_ids:
+            cursor.execute('SELECT chat_id FROM antidel_cache WHERE message_id = ?', (msg_id,))
+            row = cursor.fetchone()
+            if row and row[0] > 0:
+                await process_cached_message(row[0], msg_id, "حذف شد 🗑️")
 
 @client.on(events.MessageEdited)
 async def handle_edited(event):
     if not get_config('antidel') or not event.is_private: return
-    deleted_keywords = ['پاک شد', 'حذف شد', 'منقضی', 'expired', 'deleted', 'این نجوا']
-    if event.text and any(keyword in event.text.lower() for keyword in deleted_keywords):
-        await process_cached_message(event.chat_id, event.id, "ویرایش/منقضی شد ⚠️")
+    
+    cursor.execute('SELECT text_content, media_type, media_path, date FROM antidel_cache WHERE chat_id = ? AND message_id = ?', (event.chat_id, event.id))
+    row = cursor.fetchone()
+    if row:
+        old_text, media_type, media_path, date_str = row
+        new_text = event.text or ""
+        
+        # اگر متن تغییر کرده، نسخه قبلی را بفرست
+        if old_text != new_text:
+            await process_cached_message(event.chat_id, event.id, "ویرایش شد ⚠️")
+            
+            # به‌روزرسانی دیتابیس
+            cursor.execute('UPDATE antidel_cache SET text_content = ? WHERE chat_id = ? AND message_id = ?', (new_text, event.chat_id, event.id))
+            conn.commit()
 
 async def process_cached_message(chat_id, msg_id, action_text):
     cursor.execute('SELECT sender_name, text_content, media_type, media_path, date FROM antidel_cache WHERE chat_id = ? AND message_id = ?', (chat_id, msg_id))
@@ -341,20 +335,24 @@ async def process_cached_message(chat_id, msg_id, action_text):
             if media_path and os.path.exists(media_path):
                 await client.send_file('me', media_path, caption=caption)
                 os.remove(media_path)
-            elif text_content: await client.send_message('me', caption)
-            else: await client.send_message('me', caption + "\n[بدون محتوا]")
+            elif text_content:
+                await client.send_message('me', caption)
+            else:
+                await client.send_message('me', caption + "\n[بدون محتوا]")
         except Exception as e: print(f"خطا در ارسال: {e}")
+        
         cursor.execute('DELETE FROM antidel_cache WHERE chat_id = ? AND message_id = ?', (chat_id, msg_id))
         conn.commit()
 
 # ==========================================
 # اجرای نهایی
 # ==========================================
-print("🚀 سلف‌بات ترکیبی (آنتی‌دلیت + نجوا + آرشیو + آپلود عکس) در حال راه‌اندازی...")
+print("🚀 سلف‌بات در حال راه‌اندازی...")
+print("✅ آنتی‌دلیت و نجوا به صورت پیش‌فرض روشن هستند.")
+print("⚠️ نکته مهم: برای تست آنتی‌دلیت، باید پیام طرف مقابل را پاک کنید، نه پیام خودتان را!")
 client.start()
 
-# اجرای ماژول آرشیو در پس‌زمینه (بدون بلاک کردن سلف‌بات)
 client.loop.create_task(run_archiver_background())
 
-print("✅ سلف‌بات آماده است. دستورات: .antidel | .najva | .archive")
+print("✅ سلف‌بات آماده است.")
 client.run_until_disconnected()
