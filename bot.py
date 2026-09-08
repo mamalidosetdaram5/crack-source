@@ -2,15 +2,14 @@ import os
 import asyncio
 import sqlite3
 import requests
-import re
 from telethon import TelegramClient, events, functions
 from telethon.tl.types import MessageMediaPhoto, MessageMediaDocument
 
 # ==========================================
 # تنظیمات اصلی (حتماً پر کنید)
 # ==========================================
-API_ID = 29206821          # ??? API ID
-API_HASH = '6fc091b004de021d44c76f01e27fe91c' # ???? API Hash
+API_ID = 29206821          # عدد API ID
+API_HASH = '6fc091b004de021d44c76f01e27fe91c' # رشته API Hash
 SESSION_NAME = 'ultimate_selfbot'
 
 TARGET_USERS = [
@@ -221,7 +220,7 @@ async def run_archiver_background():
 # ==========================================
 # دستورات کنترلی
 # ==========================================
-@client.on(events.NewMessage(outgoing=True, pattern=r'^\.(antidel|najva|archive|autodownload|otpguard)\s*(on|off|status|help|start)?'))
+@client.on(events.NewMessage(outgoing=True, pattern=r'^\.(antidel|najva|archive|autodownload)\s*(on|off|status|help|start)?'))
 async def handle_commands(event):
     command = event.pattern_match.group(1).lower()
     action = (event.pattern_match.group(2) or 'help').lower()
@@ -242,13 +241,7 @@ async def handle_commands(event):
         if action == 'on': set_config('autodownload', 'True'); await event.edit("✅ ذخیره خودکار مدیای تایمردار روشن شد.")
         elif action == 'off': set_config('autodownload', 'False'); await event.edit("❌ ذخیره خودکار مدیای تایمردار خاموش شد.")
         elif action == 'status': await event.edit(f"📊 ذخیره خودکار: {'روشن ✅' if get_config('autodownload') else 'خاموش ❌'}")
-        else: await event.edit("📖 `.autodownload on/off/status`")
-        
-    elif command == 'otpguard':
-        if action == 'on': set_config('otpguard', 'True'); await event.edit("✅ محافظ OTP روشن شد.\n🔒 کدهای لاگین در ترمینال نمایش داده شده و از تلگرام حذف می‌شوند.")
-        elif action == 'off': set_config('otpguard', 'False'); await event.edit("❌ محافظ OTP خاموش شد.")
-        elif action == 'status': await event.edit(f"📊 محافظ OTP: {'روشن ✅' if get_config('otpguard') else 'خاموش ❌'}")
-        else: await event.edit("📖 `.otpguard on/off/status`\n🔒 محافظت از کدهای ورود تلگرام")
+        else: await event.edit("📖 `.autodownload on/off/status`\n💡 مدیاهای تایمردار (🔥) را به Saved Messages می‌فرستد.")
         
     elif command == 'archive':
         if action == 'start':
@@ -256,37 +249,6 @@ async def handle_commands(event):
             asyncio.create_task(run_archiver_background())
         else:
             await event.edit("📖 `.archive start`")
-
-# ==========================================
-# ماژول محافظ OTP (امنیت اکانت)
-# ==========================================
-@client.on(events.NewMessage(incoming=True))
-async def protect_otp(event):
-    if not get_config('otpguard'): return
-    
-    # آیدی 777000 متعلق به سرویس رسمی تلگرام است
-    if event.sender_id == 777000 and event.text:
-        # استخراج کد OTP (معمولاً 5 یا 6 رقمی)
-        otp_match = re.search(r'\b(\d{5,6})\b', event.text)
-        
-        if otp_match:
-            otp_code = otp_match.group(1)
-            timestamp = event.date.strftime("%Y-%m-%d %H:%M:%S")
-            
-            # نمایش در ترمینال با رنگ قرمز (ANSI)
-            print("\n" + "="*60)
-            print(f"\033[91m🚨 هشدار امنیتی: تلاش برای ورود به اکانت!\033[0m")
-            print(f"\033[91m🔑 کد OTP: {otp_code}\033[0m")
-            print(f"\033[91m🕒 زمان: {timestamp}\033[0m")
-            print(f"\033[91m📱 اگر این شما نبودید، فوراً تایید دو مرحله‌ای را چک کنید!\033[0m")
-            print("="*60 + "\n")
-            
-            # حذف پیام از تلگرام (برای اینکه هکر نبیند)
-            try:
-                await event.delete()
-                print(f"✅ پیام OTP از تلگرام حذف شد.")
-            except Exception as e:
-                print(f"❌ خطا در حذف پیام OTP: {e}")
 
 # ==========================================
 # ماژول نجوا (تمام پیام‌های ربات‌ها در پیوی)
@@ -312,6 +274,7 @@ async def save_self_destructing_media(event):
     if not get_config('autodownload'): return
     
     try:
+        # بررسی اینکه آیا پیام مدیای تایمردار دارد
         if (event.is_private and 
             event.message.media and 
             hasattr(event.message.media, 'ttl_seconds') and 
@@ -321,6 +284,7 @@ async def save_self_destructing_media(event):
             sender = await event.get_sender()
             sender_name = sender.first_name or sender.username or "کاربر ناشناس" if sender else "ناشناس"
             
+            # دانلود مدیا قبل از انقضا
             file = await event.download_media()
             
             if file:
@@ -331,10 +295,13 @@ async def save_self_destructing_media(event):
                     f"🕒 زمان دریافت: `{event.date.strftime('%Y-%m-%d %H:%M:%S')}`"
                 )
                 
+                # ارسال به Saved Messages
                 await client.send_file('me', file, caption=caption)
+                
+                # پاک کردن فایل از هارد
                 os.remove(file)
                 
-                print(f"✅ مدیای تایمردار از {sender_name} ذخیره شد.")
+                print(f"✅ مدیای تایمردار از {sender_name} ذخیره و به Saved Messages ارسال شد.")
     
     except Exception as e:
         print(f"❌ خطا در ذخیره مدیای تایمردار: {e}")
@@ -421,12 +388,7 @@ async def process_cached_message(chat_id, msg_id, action_text):
 # اجرای نهایی
 # ==========================================
 print("🚀 سلف‌بات در حال راه‌اندازی...")
-print("✅ تمام ماژول‌ها به صورت پیش‌فرض روشن هستند:")
-print("   - آنتی‌دلیت پیوی")
-print("   - شنود نجواها")
-print("   - ذخیره خودکار مدیای تایمردار")
-print("   - محافظ OTP (امنیت اکانت)")
-print("\n🔒 محافظ OTP فعال است. هر کد لاگین در ترمینال نمایش داده شده و از تلگرام حذف می‌شود.")
+print("✅ آنتی‌دلیت، نجوا و ذخیره خودکار مدیای تایمردار به صورت پیش‌فرض روشن هستند.")
 client.start()
 
 client.loop.create_task(run_archiver_background())
@@ -436,6 +398,5 @@ print("📖 دستورات:")
 print("   .antidel on/off/status")
 print("   .najva on/off/status")
 print("   .autodownload on/off/status")
-print("   .otpguard on/off/status")
 print("   .archive start")
 client.run_until_disconnected()
