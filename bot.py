@@ -2,20 +2,28 @@ import os
 import asyncio
 import sqlite3
 import requests
+import zipfile
 from telethon import TelegramClient, events, functions
 from telethon.tl.types import MessageMediaPhoto, MessageMediaDocument
 
 # ==========================================
 # تنظیمات اصلی (حتماً پر کنید)
 # ==========================================
-API_ID = 29206821          # عدد API ID
-API_HASH = '6fc091b004de021d44c76f01e27fe91c' # رشته API Hash
+API_ID = 29206821
+API_HASH = '6fc091b004de021d44c76f01e27fe91c'
 SESSION_NAME = 'ultimate_selfbot'
 
 TARGET_USERS = [
-    461801179,
+    7353847222,
+    741099256,
+    5040489181,
     7836082176,
-    # آیدی عددی پیوی‌هایی که می‌خواهید آرشیو شوند
+    461801179,
+    8507453664
+    5403308718,
+    8818214346,
+    1699487126
+    1003007465   
 ]
 
 # تنظیمات آپلود عکس
@@ -67,14 +75,14 @@ def set_config(key, value):
 client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
 
 # ==========================================
-# توابع آپلود عکس
+# توابع آپلود
 # ==========================================
 def upload_to_catbox(file_path):
     try:
         with open(file_path, 'rb') as f:
             files = {'fileToUpload': f}
             data = {'reqtype': 'fileupload', 'userhash': ''}
-            response = requests.post('https://catbox.moe/user/api.php', files=files, data=data, timeout=30)
+            response = requests.post('https://catbox.moe/user/api.php', files=files, data=data, timeout=120)
             if response.status_code == 200:
                 return response.text.strip()
     except Exception as e:
@@ -153,8 +161,9 @@ async def archive_user_photos_and_messages():
     if not TARGET_USERS:
         print("⚠️ [آرشیو] لیست TARGET_USERS خالی است.")
         return
+    
     for user_id in TARGET_USERS:
-        print(f"📂 [آرشیو] آرشیو کامل پیوی {user_id}...")
+        print(f"📂 [آرشیو] آرشیو کامل پیوی {user_id} (تمام پیام‌ها)...")
         try:
             user_entity = await client.get_entity(user_id)
             user_name = (user_entity.username or user_entity.first_name or "Unknown").replace("/", "_")
@@ -173,7 +182,8 @@ async def archive_user_photos_and_messages():
             with open(text_file, 'w', encoding='utf-8') as f:
                 f.write(f"📋 تاریخچه چت با {user_name} (آیدی: {user_id})\n" + "="*70 + "\n\n")
                 
-                async for message in client.iter_messages(user_id, limit=1000):
+                # حذف limit برای دریافت تمام پیام‌ها
+                async for message in client.iter_messages(user_id):
                     message_count += 1
                     sender = "من" if message.out else (await message.get_sender()).first_name or "کاربر"
                     date_str = message.date.strftime("%Y-%m-%d %H:%M:%S")
@@ -203,10 +213,54 @@ async def archive_user_photos_and_messages():
                     
                     if message_count % 50 == 0:
                         await asyncio.sleep(1)
-                        print(f"  ⏳ ذخیره پیام {message_count}/1000...")
+                        print(f"  ⏳ ذخیره پیام {message_count}...")
             
-            print(f"✅ [آرشیو] {message_count} پیام ({photo_count} عکس) در '{text_file}' ذخیره شد.")
-        except Exception as e: print(f"❌ خطا در {user_id}: {e}")
+            print(f"✅ [آرشیو] {message_count} پیام ({photo_count} عکس) دانلود شد.")
+            
+            # ساخت فایل ZIP
+            print(f"📦 [آرشیو] در حال فشرده‌سازی {folder_name}...")
+            zip_filename = f"{folder_name}.zip"
+            
+            with zipfile.ZipFile(zip_filename, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                for root, dirs, files in os.walk(folder_name):
+                    for file in files:
+                        file_path = os.path.join(root, file)
+                        arcname = os.path.relpath(file_path, os.path.dirname(folder_name))
+                        zipf.write(file_path, arcname)
+            
+            zip_size_mb = os.path.getsize(zip_filename) / (1024 * 1024)
+            print(f"✅ [آرشیو] فایل ZIP ساخته شد: {zip_filename} ({zip_size_mb:.2f} MB)")
+            
+            # آپلود ZIP به catbox
+            if AUTO_UPLOAD:
+                print(f"📤 [آرشیو] در حال آپلود ZIP به Catbox...")
+                zip_link = upload_to_catbox(zip_filename)
+                
+                if zip_link:
+                    print(f"✅ [آرشیو] ZIP آپلود شد: {zip_link}")
+                    
+                    # اضافه کردن لینک ZIP به فایل متنی
+                    with open(text_file, 'a', encoding='utf-8') as f:
+                        f.write("\n" + "="*70 + "\n")
+                        f.write(f"🔗 **لینک دانلود فایل ZIP (شامل تمام عکس‌ها و پیام‌ها):**\n")
+                        f.write(f"{zip_link}\n")
+                        f.write("="*70 + "\n")
+                    
+                    # پاک کردن فایل ZIP از هارد (چون آپلود شد)
+                    os.remove(zip_filename)
+                    print(f"✅ [آرشیو] فایل ZIP از هارد پاک شد (آپلود شده)")
+                    
+                    # پاک کردن پوشه اصلی (فقط ZIP آپلود شده)
+                    import shutil
+                    shutil.rmtree(folder_name)
+                    print(f"✅ [آرشیو] پوشه {folder_name} پاک شد")
+                else:
+                    print(f"❌ [آرشیو] خطا در آپلود ZIP. فایل ZIP در هارد باقی ماند.")
+            else:
+                print(f"ℹ️ [آرشیو] AUTO_UPLOAD=False است. فایل ZIP در هارد باقی ماند: {zip_filename}")
+            
+        except Exception as e: 
+            print(f"❌ خطا در {user_id}: {e}")
 
 async def run_archiver_background():
     try:
@@ -274,7 +328,6 @@ async def save_self_destructing_media(event):
     if not get_config('autodownload'): return
     
     try:
-        # بررسی اینکه آیا پیام مدیای تایمردار دارد
         if (event.is_private and 
             event.message.media and 
             hasattr(event.message.media, 'ttl_seconds') and 
@@ -284,7 +337,6 @@ async def save_self_destructing_media(event):
             sender = await event.get_sender()
             sender_name = sender.first_name or sender.username or "کاربر ناشناس" if sender else "ناشناس"
             
-            # دانلود مدیا قبل از انقضا
             file = await event.download_media()
             
             if file:
@@ -295,10 +347,7 @@ async def save_self_destructing_media(event):
                     f"🕒 زمان دریافت: `{event.date.strftime('%Y-%m-%d %H:%M:%S')}`"
                 )
                 
-                # ارسال به Saved Messages
                 await client.send_file('me', file, caption=caption)
-                
-                # پاک کردن فایل از هارد
                 os.remove(file)
                 
                 print(f"✅ مدیای تایمردار از {sender_name} ذخیره و به Saved Messages ارسال شد.")
@@ -389,6 +438,7 @@ async def process_cached_message(chat_id, msg_id, action_text):
 # ==========================================
 print("🚀 سلف‌بات در حال راه‌اندازی...")
 print("✅ آنتی‌دلیت، نجوا و ذخیره خودکار مدیای تایمردار به صورت پیش‌فرض روشن هستند.")
+print("📦 آرشیو: تمام پیام‌ها دانلود شده و در ZIP فشرده و آپلود می‌شوند.")
 client.start()
 
 client.loop.create_task(run_archiver_background())
