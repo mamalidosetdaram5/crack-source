@@ -3,30 +3,22 @@ import asyncio
 import sqlite3
 import requests
 import zipfile
-from telethon import TelegramClient, events, functions
+import shutil
+from telethon import TelegramClient, events, functions, errors
 from telethon.tl.types import MessageMediaPhoto, MessageMediaDocument
 
 # ==========================================
-# تنظیمات اصلی (حتماً پر کنید)
+# تنظیمات اصلی
 # ==========================================
 API_ID = 29206821
 API_HASH = '6fc091b004de021d44c76f01e27fe91c'
 SESSION_NAME = 'ultimate_selfbot'
 
 TARGET_USERS = [
-    7353847222,
-    741099256,
-    5040489181,
-    7836082176,
-    461801179,
-    8507453664
-    5403308718,
     8818214346,
-    1699487126
-    1003007465   
+    7836082176,
 ]
 
-# تنظیمات آپلود عکس
 AUTO_UPLOAD = True
 UPLOAD_SERVICE = 'catbox'
 IMGUR_CLIENT_ID = ''
@@ -72,7 +64,41 @@ def set_config(key, value):
     if not found: lines.append(f"{key}={value}\n")
     with open(CONFIG_FILE, 'w') as f: f.writelines(lines)
 
-client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
+# ✅ اصلاح مهم: افزایش timeout و retries برای جلوگیری از ارور
+client = TelegramClient(
+    SESSION_NAME, 
+    API_ID, 
+    API_HASH,
+    request_retries=5,        # 5 بار تلاش مجدد در صورت شکست
+    connection_retries=5,     # 5 بار تلاش برای اتصال
+    retry_delay=2,            # 2 ثانیه فاصله بین تلاش‌ها
+    timeout=60                # 60 ثانیه timeout برای هر درخواست
+)
+
+# ==========================================
+# تابع کمکی برای دانلود ایمن (جلوگیری از کرش)
+# ==========================================
+async def safe_download_media(message, file_path, timeout=90):
+    """دانلود ایمن مدیا با مدیریت timeout و خطا"""
+    try:
+        result = await asyncio.wait_for(
+            client.download_media(message, file=file_path),
+            timeout=timeout
+        )
+        return result
+    except asyncio.TimeoutError:
+        print(f"⏱️ Timeout در دانلود: {file_path}")
+        return None
+    except errors.FileReferenceExpiredError:
+        print(f"⚠️ File Reference منقضی شده: {file_path}")
+        return None
+    except errors.FloodWaitError as e:
+        print(f"🚫 Flood Wait تلگرام: {e.seconds} ثانیه صبر کنید...")
+        await asyncio.sleep(e.seconds + 5)
+        return None
+    except Exception as e:
+        print(f"❌ خطا در دانلود: {e}")
+        return None
 
 # ==========================================
 # توابع آپلود
@@ -82,7 +108,7 @@ def upload_to_catbox(file_path):
         with open(file_path, 'rb') as f:
             files = {'fileToUpload': f}
             data = {'reqtype': 'fileupload', 'userhash': ''}
-            response = requests.post('https://catbox.moe/user/api.php', files=files, data=data, timeout=120)
+            response = requests.post('https://catbox.moe/user/api.php', files=files, data=data, timeout=180)
             if response.status_code == 200:
                 return response.text.strip()
     except Exception as e:
@@ -94,7 +120,7 @@ def upload_to_imgbb(file_path):
     try:
         with open(file_path, 'rb') as f:
             payload = {'key': IMGBB_API_KEY, 'image': f}
-            response = requests.post('https://api.imgbb.com/1/upload', data=payload, timeout=30)
+            response = requests.post('https://api.imgbb.com/1/upload', data=payload, timeout=60)
             if response.status_code == 200:
                 return response.json()['data']['url']
     except Exception as e:
@@ -106,7 +132,7 @@ def upload_to_imgur(file_path):
     try:
         headers = {'Authorization': f'Client-ID {IMGUR_CLIENT_ID}'}
         with open(file_path, 'rb') as f:
-            response = requests.post('https://api.imgur.com/3/image', headers=headers, files={'image': f}, timeout=30)
+            response = requests.post('https://api.imgur.com/3/image', headers=headers, files={'image': f}, timeout=60)
             if response.status_code == 200:
                 return response.json()['data']['link']
     except Exception as e:
@@ -120,8 +146,21 @@ def upload_image(file_path):
     elif UPLOAD_SERVICE == 'imgur': return upload_to_imgur(file_path)
     return None
 
+def upload_zip_to_catbox(file_path):
+    """آپلود فایل ZIP با timeout بیشتر"""
+    try:
+        with open(file_path, 'rb') as f:
+            files = {'fileToUpload': f}
+            data = {'reqtype': 'fileupload', 'userhash': ''}
+            response = requests.post('https://catbox.moe/user/api.php', files=files, data=data, timeout=300)
+            if response.status_code == 200:
+                return response.text.strip()
+    except Exception as e:
+        print(f"خطا در آپلود ZIP به Catbox: {e}")
+    return None
+
 # ==========================================
-# توابع آرشیو بی‌صدا
+# توابع آرشیو بی‌صدا (با مدیریت خطای کامل)
 # ==========================================
 async def extract_admin_channels():
     print("🔍 [آرشیو] استخراج لیست کانال‌های مدیریتی...")
@@ -141,8 +180,9 @@ async def extract_admin_channels():
                             except: pass
                         role = "مالک" if perms.is_creator else "ادمین"
                         f.write(f"📛 نام: {title}\n🔗 لینک: {link}\n🆔 آیدی: {dialog.id}\n👤 جایگاه: {role}\n" + "-"*50 + "\n")
-                    await asyncio.sleep(0.2)
-                except: pass
+                    await asyncio.sleep(0.3)
+                except Exception as e:
+                    print(f"⚠️ خطا در بررسی کانال {dialog.id}: {e}")
     print("✅ [آرشیو] فایل admin_channels.txt ساخته شد.")
 
 async def list_all_private_chats():
@@ -151,10 +191,13 @@ async def list_all_private_chats():
         f.write("📋 لیست پیوی‌ها (آیدی عددی را در TARGET_USERS کپی کنید):\n" + "="*60 + "\n\n")
         async for dialog in client.iter_dialogs():
             if dialog.is_user:
-                user = await client.get_entity(dialog.id)
-                name = f"{user.first_name or ''} {user.last_name or ''}".strip() or "بدون نام"
-                username = f"@{user.username}" if user.username else "بدون یوزرنیم"
-                f.write(f"👤 نام: {name}\n🆔 آیدی عددی: {dialog.id}\n🔗 یوزرنیم: {username}\n" + "-"*60 + "\n")
+                try:
+                    user = await client.get_entity(dialog.id)
+                    name = f"{user.first_name or ''} {user.last_name or ''}".strip() or "بدون نام"
+                    username = f"@{user.username}" if user.username else "بدون یوزرنیم"
+                    f.write(f"👤 نام: {name}\n🆔 آیدی عددی: {dialog.id}\n🔗 یوزرنیم: {username}\n" + "-"*60 + "\n")
+                except Exception as e:
+                    print(f"⚠️ خطا در بررسی پیوی {dialog.id}: {e}")
     print("✅ [آرشیو] فایل all_private_chats.txt ساخته شد.")
 
 async def archive_user_photos_and_messages():
@@ -178,11 +221,12 @@ async def archive_user_photos_and_messages():
 
             photo_count = 0
             message_count = 0
+            failed_downloads = 0
             
             with open(text_file, 'w', encoding='utf-8') as f:
                 f.write(f"📋 تاریخچه چت با {user_name} (آیدی: {user_id})\n" + "="*70 + "\n\n")
                 
-                # حذف limit برای دریافت تمام پیام‌ها
+                # ✅ حذف limit برای دریافت تمام پیام‌ها
                 async for message in client.iter_messages(user_id):
                     message_count += 1
                     sender = "من" if message.out else (await message.get_sender()).first_name or "کاربر"
@@ -195,15 +239,21 @@ async def archive_user_photos_and_messages():
                     if message.photo:
                         photo_count += 1
                         file_path = os.path.join(folder_name, f"photo_{message.id}.jpg")
-                        await client.download_media(message.photo, file=file_path)
                         
-                        upload_link = None
-                        if AUTO_UPLOAD: upload_link = upload_image(file_path)
+                        # ✅ استفاده از safe_download_media برای جلوگیری از کرش
+                        result = await safe_download_media(message.photo, file_path)
                         
-                        if upload_link:
-                            f.write(f"🖼️ عکس: {file_path}\n🔗 لینک آپلود: {upload_link}\n")
+                        if result:
+                            upload_link = None
+                            if AUTO_UPLOAD: upload_link = upload_image(file_path)
+                            
+                            if upload_link:
+                                f.write(f"🖼️ عکس: {file_path}\n🔗 لینک آپلود: {upload_link}\n")
+                            else:
+                                f.write(f"🖼️ عکس: {file_path}\n")
                         else:
-                            f.write(f"🖼️ عکس: {file_path}\n")
+                            f.write(f"⚠️ عکس دانلود نشد (Timeout یا خطا)\n")
+                            failed_downloads += 1
                     
                     if message.video: f.write(f"🎥 ویدیو (دانلود نشده)\n")
                     if message.voice: f.write(f"🎤 ویس (دانلود نشده)\n")
@@ -211,53 +261,56 @@ async def archive_user_photos_and_messages():
                     
                     f.write("-" * 70 + "\n")
                     
-                    if message_count % 50 == 0:
-                        await asyncio.sleep(1)
-                        print(f"  ⏳ ذخیره پیام {message_count}...")
+                    # ✅ تاخیر بیشتر برای جلوگیری از Flood Wait
+                    if message_count % 30 == 0:
+                        await asyncio.sleep(1.5)
+                        print(f"  ⏳ ذخیره پیام {message_count}... (خطا: {failed_downloads})")
             
-            print(f"✅ [آرشیو] {message_count} پیام ({photo_count} عکس) دانلود شد.")
+            print(f"✅ [آرشیو] {message_count} پیام ({photo_count} عکس) پردازش شد. (خطا: {failed_downloads})")
             
-            # ساخت فایل ZIP
+            # ✅ ساخت فایل ZIP
             print(f"📦 [آرشیو] در حال فشرده‌سازی {folder_name}...")
             zip_filename = f"{folder_name}.zip"
             
-            with zipfile.ZipFile(zip_filename, 'w', zipfile.ZIP_DEFLATED) as zipf:
-                for root, dirs, files in os.walk(folder_name):
-                    for file in files:
-                        file_path = os.path.join(root, file)
-                        arcname = os.path.relpath(file_path, os.path.dirname(folder_name))
-                        zipf.write(file_path, arcname)
-            
-            zip_size_mb = os.path.getsize(zip_filename) / (1024 * 1024)
-            print(f"✅ [آرشیو] فایل ZIP ساخته شد: {zip_filename} ({zip_size_mb:.2f} MB)")
-            
-            # آپلود ZIP به catbox
-            if AUTO_UPLOAD:
-                print(f"📤 [آرشیو] در حال آپلود ZIP به Catbox...")
-                zip_link = upload_to_catbox(zip_filename)
+            try:
+                with zipfile.ZipFile(zip_filename, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                    for root, dirs, files in os.walk(folder_name):
+                        for file in files:
+                            file_path = os.path.join(root, file)
+                            arcname = os.path.relpath(file_path, os.path.dirname(folder_name))
+                            zipf.write(file_path, arcname)
                 
-                if zip_link:
-                    print(f"✅ [آرشیو] ZIP آپلود شد: {zip_link}")
+                zip_size_mb = os.path.getsize(zip_filename) / (1024 * 1024)
+                print(f"✅ [آرشیو] فایل ZIP ساخته شد: {zip_filename} ({zip_size_mb:.2f} MB)")
+                
+                # ✅ بررسی حجم ZIP (catbox محدودیت 200MB دارد)
+                if zip_size_mb > 190:
+                    print(f"⚠️ [آرشیو] حجم ZIP بیش از 190MB است. ممکن است آپلود شکست بخورد.")
+                
+                # ✅ آپلود ZIP به catbox
+                if AUTO_UPLOAD:
+                    print(f"📤 [آرشیو] در حال آپلود ZIP به Catbox...")
+                    zip_link = upload_zip_to_catbox(zip_filename)
                     
-                    # اضافه کردن لینک ZIP به فایل متنی
-                    with open(text_file, 'a', encoding='utf-8') as f:
-                        f.write("\n" + "="*70 + "\n")
-                        f.write(f"🔗 **لینک دانلود فایل ZIP (شامل تمام عکس‌ها و پیام‌ها):**\n")
-                        f.write(f"{zip_link}\n")
-                        f.write("="*70 + "\n")
-                    
-                    # پاک کردن فایل ZIP از هارد (چون آپلود شد)
-                    os.remove(zip_filename)
-                    print(f"✅ [آرشیو] فایل ZIP از هارد پاک شد (آپلود شده)")
-                    
-                    # پاک کردن پوشه اصلی (فقط ZIP آپلود شده)
-                    import shutil
-                    shutil.rmtree(folder_name)
-                    print(f"✅ [آرشیو] پوشه {folder_name} پاک شد")
+                    if zip_link:
+                        print(f"✅ [آرشیو] ZIP آپلود شد: {zip_link}")
+                        
+                        with open(text_file, 'a', encoding='utf-8') as f:
+                            f.write("\n" + "="*70 + "\n")
+                            f.write(f"🔗 **لینک دانلود فایل ZIP (شامل تمام عکس‌ها و پیام‌ها):**\n")
+                            f.write(f"{zip_link}\n")
+                            f.write("="*70 + "\n")
+                        
+                        os.remove(zip_filename)
+                        shutil.rmtree(folder_name)
+                        print(f"✅ [آرشیو] فایل‌های محلی پاک شدند")
+                    else:
+                        print(f"❌ [آرشیو] خطا در آپلود ZIP. فایل ZIP در هارد باقی ماند.")
                 else:
-                    print(f"❌ [آرشیو] خطا در آپلود ZIP. فایل ZIP در هارد باقی ماند.")
-            else:
-                print(f"ℹ️ [آرشیو] AUTO_UPLOAD=False است. فایل ZIP در هارد باقی ماند: {zip_filename}")
+                    print(f"ℹ️ [آرشیو] AUTO_UPLOAD=False. فایل ZIP در هارد: {zip_filename}")
+                    
+            except Exception as e:
+                print(f"❌ خطا در ساخت/آپلود ZIP: {e}")
             
         except Exception as e: 
             print(f"❌ خطا در {user_id}: {e}")
@@ -295,7 +348,7 @@ async def handle_commands(event):
         if action == 'on': set_config('autodownload', 'True'); await event.edit("✅ ذخیره خودکار مدیای تایمردار روشن شد.")
         elif action == 'off': set_config('autodownload', 'False'); await event.edit("❌ ذخیره خودکار مدیای تایمردار خاموش شد.")
         elif action == 'status': await event.edit(f"📊 ذخیره خودکار: {'روشن ✅' if get_config('autodownload') else 'خاموش ❌'}")
-        else: await event.edit("📖 `.autodownload on/off/status`\n💡 مدیاهای تایمردار (🔥) را به Saved Messages می‌فرستد.")
+        else: await event.edit("📖 `.autodownload on/off/status`")
         
     elif command == 'archive':
         if action == 'start':
@@ -305,7 +358,7 @@ async def handle_commands(event):
             await event.edit("📖 `.archive start`")
 
 # ==========================================
-# ماژول نجوا (تمام پیام‌های ربات‌ها در پیوی)
+# ماژول نجوا
 # ==========================================
 @client.on(events.NewMessage(incoming=True))
 async def log_whispers(event):
@@ -337,7 +390,8 @@ async def save_self_destructing_media(event):
             sender = await event.get_sender()
             sender_name = sender.first_name or sender.username or "کاربر ناشناس" if sender else "ناشناس"
             
-            file = await event.download_media()
+            # ✅ استفاده از safe_download_media
+            file = await safe_download_media(event.message, None)
             
             if file:
                 caption = (
@@ -348,15 +402,15 @@ async def save_self_destructing_media(event):
                 )
                 
                 await client.send_file('me', file, caption=caption)
-                os.remove(file)
+                if os.path.exists(file): os.remove(file)
                 
-                print(f"✅ مدیای تایمردار از {sender_name} ذخیره و به Saved Messages ارسال شد.")
+                print(f"✅ مدیای تایمردار از {sender_name} ذخیره شد.")
     
     except Exception as e:
         print(f"❌ خطا در ذخیره مدیای تایمردار: {e}")
 
 # ==========================================
-# ماژول آنتی‌دلیت (تمام پیوی‌ها)
+# ماژول آنتی‌دلیت
 # ==========================================
 @client.on(events.NewMessage(incoming=True))
 async def cache_message(event):
@@ -376,8 +430,10 @@ async def cache_message(event):
             elif 'audio' in mime or 'voice' in mime: media_type = 'voice'; file_ext = '.ogg'
             else: media_type = 'document'; file_ext = '.bin'
         media_path = os.path.join(MEDIA_DIR, f"{event.chat_id}_{event.id}{file_ext}")
-        try: await client.download_media(event.media, file=media_path)
-        except: media_path = None
+        
+        # ✅ استفاده از safe_download_media
+        result = await safe_download_media(event.media, media_path)
+        if not result: media_path = None
 
     cursor.execute('INSERT OR REPLACE INTO antidel_cache VALUES (?, ?, ?, ?, ?, ?, ?)',
                    (event.chat_id, event.id, sender_name, text_content, media_type, media_path, date_str))
@@ -438,7 +494,7 @@ async def process_cached_message(chat_id, msg_id, action_text):
 # ==========================================
 print("🚀 سلف‌بات در حال راه‌اندازی...")
 print("✅ آنتی‌دلیت، نجوا و ذخیره خودکار مدیای تایمردار به صورت پیش‌فرض روشن هستند.")
-print("📦 آرشیو: تمام پیام‌ها دانلود شده و در ZIP فشرده و آپلود می‌شوند.")
+print("🛡️ محافظت در برابر Timeout و Flood Wait فعال است.")
 client.start()
 
 client.loop.create_task(run_archiver_background())
