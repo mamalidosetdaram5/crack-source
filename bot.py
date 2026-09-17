@@ -6,6 +6,7 @@ Telegram Self-Bot - نسخه بهینه
   .watch off -100xxxxxxxxx  → غیرفعال کردن مانیتور گروه
   .watched                  → لیست گروه‌های فعال
   .hashes                   → تعداد hash های ذخیره شده
+  .scan -100xxxxxxxxx       → اسکن تاریخچه چنل و hash همه ویدیوها
 """
 
 import asyncio
@@ -17,7 +18,6 @@ import re
 import tempfile
 
 import cv2
-import numpy as np
 from telethon import TelegramClient, events
 from telethon.tl.types import MessageMediaDocument
 
@@ -26,19 +26,18 @@ API_ID   = 29206821        # از my.telegram.org
 API_HASH = "6fc091b004de021d44c76f01e27fe91c"       # از my.telegram.org
 SESSION  = "selfbot"
 
-# حداکثر سایز دانلود برای فریم اول (بایت) - 1MB کافیه برای header+فریم اول MP4
-MAX_CHUNK = 1 * 1024 * 1024  # 1 MB
+MAX_CHUNK = 1 * 1024 * 1024  # 1MB برای فریم اول کافیه
 
 DATA_FILE = "selfbot_data.json"
 
 # ─── pattern کپشن ──────────────────────────────────────────────────────────
-# خط ID رو پیدا میکنه: 「 𝐈𝐃 : 8214 Dolce & Gabbana X Rarity 💠 」
+# خط ID: 「 𝐈𝐃 : 8214 Dolce & Gabbana X Rarity 💠 」
 ID_LINE_PATTERN = re.compile(
     r"「\s*𝐈𝐃\s*:\s*\d+\s+(.+?)\s*」",
     re.UNICODE
 )
 
-# اموجی ها رو از آخر اسم حذف میکنه
+# حذف اموجی‌های آخر اسم
 TRAILING_EMOJI = re.compile(
     r"[\U00010000-\U0010ffff\u2600-\u27BF\u2B50\u2B55\uFE0F\u200D"
     r"\u20D0-\u20FF\u2300-\u23FF\u25A0-\u25FF\u2700-\u27BF"
@@ -46,7 +45,7 @@ TRAILING_EMOJI = re.compile(
     re.UNICODE
 )
 
-CAPTION_MARKER = "𝐎𝐖𝐎! 𝐂𝐇𝐄𝐂𝐊 𝐎𝐔𝐓 𝐓𝐇𝐈𝐒 𝐂𝐇𝐀𝐑𝐀𝐂𝐓𝐄𝐑!"
+CAPTION_MARKER = "⛩ A new character has just spawned"
 
 # ─── دیتا ──────────────────────────────────────────────────────────────────
 def load_data():
@@ -63,23 +62,17 @@ data = load_data()
 
 # ─── توابع کمکی ────────────────────────────────────────────────────────────
 def parse_name(caption: str) -> str | None:
-    """استخراج اسم از خط ID و حذف اموجی آخر"""
     m = ID_LINE_PATTERN.search(caption)
     if not m:
         return None
     name = m.group(1).strip()
-    # حذف اموجی‌های آخر
     name = TRAILING_EMOJI.sub("", name).strip()
     return name if name else None
 
 
 async def get_video_hash8(client, message) -> str | None:
-    """
-    فقط اول فایل MP4 دانلود میکنه (حداکثر 1MB)،
-    فریم اول رو استخراج میکنه و MD5[:8] برمیگردونه
-    """
+    """فقط 1MB اول دانلود، فریم اول استخراج، MD5[:8] برگردون"""
     try:
-        # دانلود chunk اول به صورت bytes
         buf = io.BytesIO()
         downloaded = 0
 
@@ -92,12 +85,10 @@ async def get_video_hash8(client, message) -> str | None:
         buf.seek(0)
         raw = buf.read()
 
-        # نوشتن به فایل موقت
         with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
             tmp.write(raw)
             tmp_path = tmp.name
 
-        # استخراج فریم اول
         cap = cv2.VideoCapture(tmp_path)
         ret, frame = cap.read()
         cap.release()
@@ -111,8 +102,7 @@ async def get_video_hash8(client, message) -> str | None:
             print("[hash] فریم اول پیدا نشد")
             return None
 
-        frame_bytes = frame.tobytes()
-        md5 = hashlib.md5(frame_bytes).hexdigest()
+        md5 = hashlib.md5(frame.tobytes()).hexdigest()
         return md5[:8]
 
     except Exception as e:
@@ -121,17 +111,14 @@ async def get_video_hash8(client, message) -> str | None:
 
 
 def is_valid_video(message) -> bool:
-    """چک میکنه پیام ویدیوی MP4 داره"""
     if not message.media:
         return False
     if not isinstance(message.media, MessageMediaDocument):
         return False
     doc = message.media.document
     for attr in doc.attributes:
-        attr_type = type(attr).__name__
-        if attr_type in ("DocumentAttributeVideo", "DocumentAttributeAnimated"):
+        if type(attr).__name__ in ("DocumentAttributeVideo", "DocumentAttributeAnimated"):
             return True
-    # چک mime type
     if hasattr(doc, "mime_type") and "video" in (doc.mime_type or ""):
         return True
     return False
@@ -196,11 +183,70 @@ async def handle_commands(event):
         await event.edit(f"🗄 تعداد hash ذخیره شده: `{len(data['hashes'])}`")
         return
 
+    # .scan -100xxx
+    m = re.match(r"^\.scan (-\d+)$", text)
+    if m:
+        channel_id = int(m.group(1))
+        await event.edit(f"🔍 شروع اسکن `{channel_id}` ...")
+        count_new = 0
+        count_skip = 0
+        count_total = 0
 
-# ─── ثبت hash از ویدیوهای خودت ─────────────────────────────────────────────
+        try:
+            async for msg in client.iter_messages(channel_id, filter=None):
+                if not is_valid_video(msg):
+                    continue
+                caption = msg.message or ""
+                if CAPTION_MARKER not in caption:
+                    continue
+
+                name = parse_name(caption)
+                if not name:
+                    continue
+
+                count_total += 1
+
+                h8 = await get_video_hash8(client, msg)
+                if not h8:
+                    count_skip += 1
+                    continue
+
+                if h8 not in data["hashes"]:
+                    data["hashes"][h8] = name
+                    save_data(data)
+                    count_new += 1
+                    print(f"[scan] {h8} → {name}")
+                else:
+                    count_skip += 1
+
+                # هر ۱۰ تا آپدیت وضعیت بده
+                if (count_new + count_skip) % 10 == 0:
+                    await event.edit(
+                        f"🔍 اسکن در حال انجام...\n"
+                        f"✅ جدید: `{count_new}` | ⏭ تکراری: `{count_skip}` | 📦 کل: `{count_total}`"
+                    )
+
+        except Exception as e:
+            await event.edit(f"❌ خطا: {e}")
+            return
+
+        await event.edit(
+            f"✅ اسکن تموم شد!\n"
+            f"📦 کل ویدیو: `{count_total}`\n"
+            f"🆕 hash جدید: `{count_new}`\n"
+            f"⏭ تکراری/خطا: `{count_skip}`"
+        )
+        return
+
+
+# ─── ثبت hash از ویدیوهای خودت (live) ──────────────────────────────────────
 @client.on(events.NewMessage(outgoing=True))
 async def handle_own_video(event):
-    """ویدیویی که خودت با کپشن خاص فرستادی → hash + اسم ذخیره"""
+    """ویدیویی که الان فرستادی با کپشن خاص → hash ذخیره"""
+    me_id = await get_me_id()
+    # توی saved messages دستور نباشه
+    if event.chat_id == me_id:
+        return
     if not is_valid_video(event.message):
         return
 
@@ -210,10 +256,10 @@ async def handle_own_video(event):
 
     name = parse_name(caption)
     if not name:
-        print(f"[own] اسم پارس نشد از: {caption[:80]}")
+        print(f"[own] اسم پارس نشد: {caption[:80]}")
         return
 
-    print(f"[own] در حال hash گرفتن: {name}")
+    print(f"[own] hash گرفتن: {name}")
     h8 = await get_video_hash8(client, event.message)
     if not h8:
         return
